@@ -1,0 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Atkinson Hyperlegible', system-ui, -apple-system, sans-serif;
+  background: linear-gradient(180deg, #f7f9ff 0%, #eef3ff 60%, #fef7fb 100%);
+  color: #1f2837;
+}
+
+button {
+  font: inherit;
+}
+
+@keyframes flip {
+  0% { transform: rotateX(0deg); }
+  50% { transform: rotateX(90deg); }
+  100% { transform: rotateX(0deg); }
+}
+
+.animate-flip {
+  animation: flip 0.5s ease;
+  transform-style: preserve-3d;
+}

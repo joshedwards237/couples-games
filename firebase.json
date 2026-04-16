@@ -1,0 +1,25 @@
+{
+  "hosting": {
+    "public": "couples-wordle-pwa/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "functions": {
+    "source": "functions"
+  },
+  "emulators": {
+    "functions": { "port": 5001 },
+    "ui":        { "port": 4000, "enabled": true },
+    "hub":       { "port": 4400 },
+    "logging":   { "port": 4500 }
+  }
+}
