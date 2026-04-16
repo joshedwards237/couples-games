@@ -91,6 +91,8 @@ export function Profile() {
           </Card>
         )}
 
+        <IdentityCard />
+
         <Card className="space-y-2 bg-white/80 backdrop-blur">
           <p className="text-sm text-textSecondary">Display name</p>
           <div className="flex gap-2">
@@ -158,4 +160,50 @@ function formatTime(ms: number): string {
   const s = seconds % 60;
   if (m === 0) return `${s}s`;
   return `${m}m ${s}s`;
+}
+
+function IdentityCard() {
+  const { user } = useAuth();
+  if (!user) return null;
+
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const avatarUrl =
+    (meta.avatar_url as string | undefined) ||
+    (meta.picture as string | undefined) ||
+    null;
+  const fullName =
+    (meta.full_name as string | undefined) ||
+    (meta.name as string | undefined) ||
+    (user.email ? user.email.split('@')[0] : 'Player');
+  const initials = fullName
+    .split(/\s+/)
+    .map((p) => p[0]?.toUpperCase() ?? '')
+    .slice(0, 2)
+    .join('') || '?';
+
+  return (
+    <Card className="flex items-center gap-4 bg-white/80 backdrop-blur">
+      {avatarUrl ? (
+        <img
+          src={avatarUrl}
+          alt=""
+          referrerPolicy="no-referrer"
+          className="h-14 w-14 rounded-full object-cover shadow-[0_4px_12px_rgba(0,0,0,0.12)]"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = 'none';
+          }}
+        />
+      ) : (
+        <div className="h-14 w-14 rounded-full bg-accent/20 text-accent grid place-items-center font-bold">
+          {initials}
+        </div>
+      )}
+      <div className="min-w-0">
+        <p className="font-semibold truncate" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
+          {fullName}
+        </p>
+        {user.email && <p className="text-sm text-textSecondary truncate">{user.email}</p>}
+      </div>
+    </Card>
+  );
 }

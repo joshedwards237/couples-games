@@ -99,3 +99,6 @@ ui-debug.log*
 # Service account keys (never commit — just in case)
 *serviceAccount*.json
 *-firebase-adminsdk-*.json
+
+# Deploy script local state
+couples-wordle-pwa/supabase/.schema.deployed.sha256

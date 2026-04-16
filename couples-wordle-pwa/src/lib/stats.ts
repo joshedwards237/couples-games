@@ -44,7 +44,7 @@ export async function saveAttempt(args: SaveAttemptArgs): Promise<void> {
 export async function fetchUserStats(userId: string): Promise<UserStats> {
   const { data, error } = await supabase
     .from('puzzle_attempts')
-    .select('win, finished, puzzles!inner(date)')
+    .select('win, finished, puzzles!puzzle_id!inner(date)')
     .eq('user_id', userId)
     .eq('finished', true)
     .order('date', { foreignTable: 'puzzles', ascending: false });
@@ -104,7 +104,7 @@ export async function fetchUserStats(userId: string): Promise<UserStats> {
 export async function fetchGameHistory(userId: string, limit = 30): Promise<GameHistoryEntry[]> {
   const { data, error } = await supabase
     .from('puzzle_attempts')
-    .select('id, guesses_used, time_ms, hints_used, win, created_at, puzzles!inner(date, word)')
+    .select('id, guesses_used, time_ms, hints_used, win, created_at, puzzles!puzzle_id!inner(date, word)')
     .eq('user_id', userId)
     .eq('finished', true)
     .order('created_at', { ascending: false })
