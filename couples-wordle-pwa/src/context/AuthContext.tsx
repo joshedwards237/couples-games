@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
+import { syncProfileFromAuth } from '../lib/profiles';
 
 interface AuthContextValue {
   user: User | null;
@@ -15,19 +16,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const syncedRef = useRef<Set<string>>(new Set());
+
+  const maybeSyncProfile = (u: User | null) => {
+    if (!u) return;
+    if (syncedRef.current.has(u.id)) return;
+    syncedRef.current.add(u.id);
+    void syncProfileFromAuth(u).catch((e) => {
+      console.error('profile sync failed', e);
+    });
+  };
 
   useEffect(() => {
     const load = async () => {
       const { data } = await supabase.auth.getSession();
       setSession(data.session ?? null);
-      setUser(data.session?.user ?? null);
+      const currentUser = data.session?.user ?? null;
+      setUser(currentUser);
       setLoading(false);
+      maybeSyncProfile(currentUser);
     };
     void load();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      setUser(session?.user ?? null);
+      const u = session?.user ?? null;
+      setUser(u);
+      maybeSyncProfile(u);
     });
     return () => {
       sub.subscription.unsubscribe();

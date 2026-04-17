@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Trophy } from 'lucide-react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import {
   Dialog,
@@ -134,6 +135,10 @@ export function Leaderboard({ entries, loading }: Props) {
                 <span className="w-6 text-center text-sm font-semibold tabular-nums text-textSecondary">
                   {idx + 1}
                 </span>
+                <Avatar className="h-7 w-7 shrink-0">
+                  {entry.avatarUrl && <AvatarImage src={entry.avatarUrl} alt="" />}
+                  <AvatarFallback className="text-[10px]">{initialsFor(entry.displayName)}</AvatarFallback>
+                </Avatar>
                 <p className="min-w-0 flex-1 truncate font-semibold">
                   {isImpostor(entry) && <span className="mr-1" title="Suspected bot">🤖</span>}
                   <span className={cn(isImpostor(entry) && 'text-textSecondary line-through decoration-textSecondary/60')}>
@@ -204,6 +209,15 @@ export function Leaderboard({ entries, loading }: Props) {
       </Dialog>
     </Card>
   );
+}
+
+function initialsFor(name: string): string {
+  const parts = (name || '').split(/\s+/).filter(Boolean);
+  const initials = parts
+    .map((p) => p[0]?.toUpperCase() ?? '')
+    .slice(0, 2)
+    .join('');
+  return initials || '?';
 }
 
 function MaskedTile({ state }: { state: LetterEval }) {

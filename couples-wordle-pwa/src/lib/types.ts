@@ -46,6 +46,7 @@ export interface UserStats {
 export interface LeaderboardEntry {
   userId: string;
   displayName: string;
+  avatarUrl: string | null;
   guessesUsed: number;
   timeMs: number;
   win: boolean;
@@ -57,6 +58,7 @@ export interface LeaderboardEntry {
 export interface Profile {
   userId: string;
   displayName: string;
+  avatarUrl: string | null;
 }
 
 export interface Couple {

@@ -35,7 +35,29 @@ export function Profile() {
     const load = async () => {
       try {
         const profile = await getProfile(user.id);
-        if (!cancelled) setDisplayName(profile?.displayName ?? '');
+        let effectiveName = profile?.displayName ?? '';
+
+        // Self-heal: if the stored display_name is blank but the user has
+        // a Google (or other OAuth) full_name in their auth metadata,
+        // persist it so the leaderboard stops calling us "Player".
+        if (!effectiveName.trim()) {
+          const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+          const fromMeta =
+            (typeof meta.full_name === 'string' ? meta.full_name : '') ||
+            (typeof meta.name === 'string' ? meta.name : '') ||
+            (user.email ? user.email.split('@')[0] : '');
+          const trimmed = fromMeta.trim();
+          if (trimmed) {
+            try {
+              const saved = await upsertDisplayName(user.id, trimmed);
+              effectiveName = saved.displayName;
+            } catch (e) {
+              console.error('display_name self-heal failed', e);
+              effectiveName = trimmed;
+            }
+          }
+        }
+        if (!cancelled) setDisplayName(effectiveName);
 
         const [userStats, userHistory, userTrophyStats] = await Promise.all([
           fetchUserStats(user.id),

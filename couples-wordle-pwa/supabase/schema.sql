@@ -384,6 +384,28 @@ create table if not exists public.couples (
   created_at timestamptz not null default now()
 );
 
+-- Additive columns in case an older version of this table predates them.
+alter table public.couples add column if not exists name text;
+alter table public.couples add column if not exists created_by uuid references auth.users(id) on delete cascade;
+alter table public.couples add column if not exists created_at timestamptz not null default now();
+
+do $$
+begin
+  -- Back-fill any rows that predate created_by (shouldn't exist, but belt-and-braces).
+  -- If a row has no creator we can't invent one safely; leave it null and let the
+  -- NOT NULL tighten below fail loudly if orphaned rows exist.
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'couples'
+      and column_name = 'created_by' and is_nullable = 'YES'
+  ) then
+    -- Only add the NOT NULL constraint if every existing row has a value.
+    if not exists (select 1 from public.couples where created_by is null) then
+      alter table public.couples alter column created_by set not null;
+    end if;
+  end if;
+end$$;
+
 alter table public.couples enable row level security;
 
 drop policy if exists "couples readable by members" on public.couples;
@@ -406,23 +428,81 @@ create table if not exists public.couple_members (
   primary key (couple_id, user_id)
 );
 
+-- Additive columns for legacy tables that predate the current shape.
+alter table public.couple_members add column if not exists couple_id uuid;
+alter table public.couple_members add column if not exists user_id uuid;
+alter table public.couple_members add column if not exists role text not null default 'member';
+alter table public.couple_members add column if not exists joined_at timestamptz not null default now();
+
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'couple_members_user_id_unique') then
     alter table public.couple_members add constraint couple_members_user_id_unique unique (user_id);
   end if;
+  if not exists (
+    select 1 from pg_constraint where conname = 'couple_members_role_check'
+  ) then
+    alter table public.couple_members
+      add constraint couple_members_role_check check (role in ('creator', 'member'));
+  end if;
 end $$;
 
+-- Reconcile legacy FK: older versions referenced a non-existent public.users
+-- table. Drop any user_id FK that doesn't target auth.users, then ensure the
+-- canonical one exists.
+do $$
+declare
+  cname text;
+begin
+  for cname in
+    select conname from pg_constraint
+     where conrelid = 'public.couple_members'::regclass
+       and contype = 'f'
+       and pg_get_constraintdef(oid) ilike '%(user_id)%'
+       and confrelid <> 'auth.users'::regclass
+  loop
+    execute format('alter table public.couple_members drop constraint %I', cname);
+  end loop;
+
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'public.couple_members'::regclass
+       and contype = 'f'
+       and pg_get_constraintdef(oid) ilike '%(user_id)%'
+       and confrelid = 'auth.users'::regclass
+  ) then
+    alter table public.couple_members
+      add constraint couple_members_user_id_fkey
+      foreign key (user_id) references auth.users(id) on delete cascade;
+  end if;
+end$$;
+
 alter table public.couple_members enable row level security;
+
+-- SELECT policy membership check. Wrapped in a SECURITY DEFINER function
+-- so the inner `select ... from couple_members` bypasses RLS — otherwise
+-- Postgres re-enters the same policy and raises "infinite recursion
+-- detected in policy for relation couple_members".
+create or replace function public.is_member_of_couple(c_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.couple_members
+    where couple_id = c_id and user_id = auth.uid()
+  )
+$$;
+
+grant execute on function public.is_member_of_couple(uuid) to authenticated;
 
 drop policy if exists "couple_members readable by couple" on public.couple_members;
 create policy "couple_members readable by couple"
   on public.couple_members for select
   to authenticated
   using (
-    user_id = auth.uid() or exists (
-      select 1 from public.couple_members cm
-      where cm.couple_id = couple_members.couple_id and cm.user_id = auth.uid()
-    )
+    user_id = auth.uid() or public.is_member_of_couple(couple_id)
   );
 
 drop policy if exists "couple_members delete own" on public.couple_members;
@@ -834,3 +914,150 @@ begin
     perform public.award_trophies_for_attempt(r.id);
   end loop;
 end$$;
+
+-- =========================================================================
+-- Display name backfill
+-- -------------------------------------------------------------------------
+-- Older profile rows may have display_name = '' if they were created before
+-- the handle_new_user trigger, or for magic-link signups where no full_name
+-- was in the OAuth metadata. For any blank profile, pull the best available
+-- name from auth.users.raw_user_meta_data, then fall back to the email
+-- prefix.
+-- =========================================================================
+update public.profiles p
+set display_name = coalesce(
+  nullif(trim(u.raw_user_meta_data->>'full_name'), ''),
+  nullif(trim(u.raw_user_meta_data->>'name'), ''),
+  split_part(u.email, '@', 1),
+  ''
+)
+from auth.users u
+where u.id = p.user_id
+  and (p.display_name is null or btrim(p.display_name) = '')
+  and coalesce(
+        nullif(trim(u.raw_user_meta_data->>'full_name'), ''),
+        nullif(trim(u.raw_user_meta_data->>'name'), ''),
+        split_part(u.email, '@', 1),
+        ''
+      ) <> '';
+
+-- Keep profile names in sync when Google refreshes the OAuth metadata
+-- AFTER signup (e.g., a user updates their Google display name). Only
+-- overwrites when the profile's current name is blank; an explicit user
+-- edit via Profile > "Display name" is preserved.
+create or replace function public.tg_sync_display_name_from_auth()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_best text;
+begin
+  if new.raw_user_meta_data is null then return new; end if;
+  v_best := coalesce(
+    nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
+    nullif(trim(new.raw_user_meta_data->>'name'), ''),
+    split_part(new.email, '@', 1),
+    ''
+  );
+  if v_best = '' then return new; end if;
+
+  update public.profiles
+  set display_name = v_best
+  where user_id = new.id
+    and (display_name is null or btrim(display_name) = '');
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_metadata_update on auth.users;
+create trigger on_auth_user_metadata_update
+after update of raw_user_meta_data, email on auth.users
+for each row execute function public.tg_sync_display_name_from_auth();
+
+-- =========================================================================
+-- Avatar URL on profiles + sync from auth.users OAuth metadata
+-- -------------------------------------------------------------------------
+-- Leaderboard + UserMenu want to show the Google profile picture next to
+-- each player. Store it on profiles so we don't have to reach into every
+-- user's auth metadata (which would require an RPC per read).
+-- =========================================================================
+alter table public.profiles add column if not exists avatar_url text;
+
+-- One-shot backfill: pull avatar_url from raw_user_meta_data (Google OAuth)
+-- or `picture` (older Supabase shape). Idempotent — only updates blank rows.
+update public.profiles p
+set avatar_url = coalesce(
+  nullif(trim(u.raw_user_meta_data->>'avatar_url'), ''),
+  nullif(trim(u.raw_user_meta_data->>'picture'), '')
+)
+from auth.users u
+where u.id = p.user_id
+  and (p.avatar_url is null or p.avatar_url = '')
+  and coalesce(
+        nullif(trim(u.raw_user_meta_data->>'avatar_url'), ''),
+        nullif(trim(u.raw_user_meta_data->>'picture'), '')
+      ) is not null;
+
+-- Extend the new-user trigger to also seed avatar_url. Keeps the existing
+-- admin-bootstrap branch.
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (user_id, display_name, avatar_url)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1), ''),
+    coalesce(
+      nullif(trim(new.raw_user_meta_data->>'avatar_url'), ''),
+      nullif(trim(new.raw_user_meta_data->>'picture'), '')
+    )
+  )
+  on conflict (user_id) do nothing;
+
+  if new.email = any (array['blackbeltjje@gmail.com']) then
+    insert into public.prank_admins (user_id) values (new.id)
+    on conflict (user_id) do nothing;
+  end if;
+  return new;
+end;
+$$;
+
+-- Extend the metadata-update trigger to sync avatar_url too. We DO always
+-- overwrite avatar_url from Google (unlike display_name which we only fill
+-- when blank) because the Google avatar is canonical and refreshes over
+-- time; users don't pick their own avatar in this app.
+create or replace function public.tg_sync_display_name_from_auth()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_best text;
+  v_avatar text;
+begin
+  if new.raw_user_meta_data is null then return new; end if;
+  v_best := coalesce(
+    nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
+    nullif(trim(new.raw_user_meta_data->>'name'), ''),
+    split_part(new.email, '@', 1),
+    ''
+  );
+  v_avatar := coalesce(
+    nullif(trim(new.raw_user_meta_data->>'avatar_url'), ''),
+    nullif(trim(new.raw_user_meta_data->>'picture'), '')
+  );
+
+  update public.profiles
+  set
+    display_name = case
+      when display_name is null or btrim(display_name) = '' then v_best
+      else display_name
+    end,
+    avatar_url = coalesce(v_avatar, avatar_url)
+  where user_id = new.id;
+  return new;
+end;
+$$;

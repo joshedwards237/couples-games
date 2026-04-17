@@ -170,18 +170,21 @@ export async function fetchLeaderboard(puzzleId: string, puzzleWord: string, cur
   const userIds = Array.from(new Set(list.map((a) => a.user_id)));
   const { data: profiles, error: profileErr } = await supabase
     .from('profiles')
-    .select('user_id, display_name')
+    .select('user_id, display_name, avatar_url')
     .in('user_id', userIds);
   if (profileErr) throw profileErr;
   const nameById = new Map<string, string>();
-  for (const p of (profiles ?? []) as Array<{ user_id: string; display_name: string }>) {
+  const avatarById = new Map<string, string | null>();
+  for (const p of (profiles ?? []) as Array<{ user_id: string; display_name: string; avatar_url: string | null }>) {
     nameById.set(p.user_id, p.display_name || 'Player');
+    avatarById.set(p.user_id, p.avatar_url ?? null);
   }
 
   return list
     .map((a) => ({
       userId: a.user_id,
       displayName: nameById.get(a.user_id) || 'Player',
+      avatarUrl: avatarById.get(a.user_id) ?? null,
       guessesUsed: a.guesses_used,
       timeMs: a.time_ms,
       win: a.win,

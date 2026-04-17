@@ -182,10 +182,15 @@ export function CoupleCard() {
   }
 
   // state === 'linked'
+  // Fall back through: profile display_name → Google full_name/name →
+  // email local-part → generic label. Same chain the IdentityCard uses.
+  const meName = meaningfulName(me?.displayName) ?? selfFallbackName(user) ?? 'You';
+  const partnerName = meaningfulName(partner?.displayName) ?? 'Your partner';
+
   return (
     <Card className="space-y-2 bg-white/80 backdrop-blur">
       <CardHeader className="space-y-1">
-        <CardTitle>Linked with {partner?.displayName || 'your partner'}</CardTitle>
+        <CardTitle>Linked with {meaningfulName(partner?.displayName) ?? 'your partner'}</CardTitle>
         <CardDescription>
           You&apos;re playing as a couple. Both of your results appear on today&apos;s leaderboard.
         </CardDescription>
@@ -193,12 +198,12 @@ export function CoupleCard() {
       <div className="flex items-center gap-3 text-sm">
         <div>
           <p className="text-xs text-textSecondary">You</p>
-          <p className="font-semibold">{me?.displayName || 'You'}</p>
+          <p className="font-semibold">{meName}</p>
         </div>
         <span className="text-textSecondary">·</span>
         <div>
           <p className="text-xs text-textSecondary">Partner</p>
-          <p className="font-semibold">{partner?.displayName || '—'}</p>
+          <p className="font-semibold">{partnerName}</p>
         </div>
       </div>
       <Button
@@ -215,7 +220,9 @@ export function CoupleCard() {
       <Dialog open={confirmLeaveOpen} onOpenChange={(o) => !busy && setConfirmLeaveOpen(o)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Leave couple with {partner?.displayName || 'your partner'}?</DialogTitle>
+            <DialogTitle>
+              Leave couple with {meaningfulName(partner?.displayName) ?? 'your partner'}?
+            </DialogTitle>
             <DialogDescription>
               You&apos;ll both need to re-link via a fresh invite to play as a couple again. Your
               individual stats and history stay put.
@@ -233,4 +240,27 @@ export function CoupleCard() {
       </Dialog>
     </Card>
   );
+}
+
+/** Returns `name` if it's a non-empty trimmed string, otherwise null. */
+function meaningfulName(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const trimmed = name.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Fallback chain for the current user's own name when their profile
+ * display_name is empty: Google `full_name` → `name` → email local-part.
+ */
+function selfFallbackName(user: { user_metadata?: unknown; email?: string | null } | null): string | null {
+  if (!user) return null;
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const fromGoogle =
+    (typeof meta.full_name === 'string' && meta.full_name.trim()) ||
+    (typeof meta.name === 'string' && meta.name.trim()) ||
+    '';
+  if (fromGoogle) return fromGoogle as string;
+  if (user.email && user.email.includes('@')) return user.email.split('@')[0];
+  return null;
 }
