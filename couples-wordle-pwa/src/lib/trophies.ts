@@ -8,7 +8,11 @@ interface TrophyMeta {
 }
 
 export const TROPHY_META: Record<TrophyKind, TrophyMeta> = {
-  win: { label: 'Win', description: 'Solved the daily puzzle.', tier: 'bronze' },
+  win: {
+    label: 'Daily W',
+    description: 'Beat your partner — fewer guesses (ties broken by time).',
+    tier: 'bronze'
+  },
   sub_3: { label: 'Sub-3', description: 'Solved in three guesses or fewer.', tier: 'silver' },
   perfect: { label: 'Perfect', description: 'Solved on the first guess.', tier: 'gold' },
   streak_7: { label: '7-day streak', description: 'Seven consecutive daily wins.', tier: 'bronze' },

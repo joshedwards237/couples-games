@@ -812,8 +812,10 @@ declare
   v_streak int := 0;
   v_cursor date;
   v_has_win boolean;
+  v_partner record;
+  v_winner_user uuid;
 begin
-  select pa.user_id, pa.puzzle_id, pa.win, pa.finished, pa.guesses_used,
+  select pa.user_id, pa.puzzle_id, pa.win, pa.finished, pa.guesses_used, pa.time_ms,
          p.date as puzzle_date
   into v_attempt
   from public.puzzle_attempts pa
@@ -824,9 +826,49 @@ begin
   if not v_attempt.finished or not v_attempt.win then return; end if;
   v_date := v_attempt.puzzle_date;
 
-  insert into public.trophies (user_id, kind, tier, puzzle_id)
-  values (v_attempt.user_id, 'win', 'bronze', v_attempt.puzzle_id)
-  on conflict do nothing;
+  -- ---------------------------------------------------------------------
+  -- "Win" trophy — head-to-head with the user's linked partner only.
+  -- Awarded the moment BOTH partners have finished+won, to whichever one
+  -- used fewer guesses (ties broken by time_ms). Perfect tie → no trophy.
+  -- Silently skipped if the user isn't in a couple, or the partner hasn't
+  -- played, or the partner didn't win.
+  -- ---------------------------------------------------------------------
+  select pa2.user_id       as partner_user_id,
+         pa2.guesses_used  as partner_guesses,
+         pa2.time_ms       as partner_time,
+         pa2.win           as partner_win,
+         pa2.finished      as partner_finished
+  into v_partner
+  from public.couple_members cm
+  join public.couple_members cm2
+    on cm2.couple_id = cm.couple_id and cm2.user_id <> cm.user_id
+  left join public.puzzle_attempts pa2
+    on pa2.user_id = cm2.user_id and pa2.puzzle_id = v_attempt.puzzle_id
+  where cm.user_id = v_attempt.user_id
+  limit 1;
+
+  if v_partner.partner_user_id is not null
+     and coalesce(v_partner.partner_finished, false) = true
+     and coalesce(v_partner.partner_win, false) = true
+  then
+    if v_attempt.guesses_used < v_partner.partner_guesses then
+      v_winner_user := v_attempt.user_id;
+    elsif v_attempt.guesses_used > v_partner.partner_guesses then
+      v_winner_user := v_partner.partner_user_id;
+    elsif coalesce(v_attempt.time_ms, 0) < coalesce(v_partner.partner_time, 0) then
+      v_winner_user := v_attempt.user_id;
+    elsif coalesce(v_attempt.time_ms, 0) > coalesce(v_partner.partner_time, 0) then
+      v_winner_user := v_partner.partner_user_id;
+    else
+      v_winner_user := null; -- perfect tie on both axes
+    end if;
+
+    if v_winner_user is not null then
+      insert into public.trophies (user_id, kind, tier, puzzle_id)
+      values (v_winner_user, 'win', 'bronze', v_attempt.puzzle_id)
+      on conflict do nothing;
+    end if;
+  end if;
 
   if v_attempt.guesses_used <= 3 then
     insert into public.trophies (user_id, kind, tier, puzzle_id)
