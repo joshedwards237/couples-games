@@ -1,6 +1,17 @@
-import { Card } from './Card';
-import { cn } from '../utils/cn';
-import type { LeaderboardEntry, LetterEval } from '../lib/types';
+import { useState } from 'react';
+import { Card } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogClose
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import type { LeaderboardEntry, LetterEval } from '@/lib/types';
 
 interface Props {
   entries: LeaderboardEntry[];
@@ -8,12 +19,13 @@ interface Props {
 }
 
 export function Leaderboard({ entries, loading }: Props) {
+  const [openEntry, setOpenEntry] = useState<LeaderboardEntry | null>(null);
+  const openIdx = openEntry ? entries.findIndex((e) => e.userId === openEntry.userId) : -1;
+
   return (
     <Card className="space-y-3 bg-white/80 backdrop-blur">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
-          Today&apos;s leaderboard
-        </h2>
+        <h2 className="font-heading text-lg font-bold">Today&apos;s leaderboard</h2>
         <span className="text-xs text-textSecondary">{entries.length} finished</span>
       </div>
 
@@ -22,43 +34,75 @@ export function Leaderboard({ entries, loading }: Props) {
       ) : entries.length === 0 ? (
         <p className="text-sm text-textSecondary">No one has finished today&apos;s puzzle yet.</p>
       ) : (
-        <ul className="space-y-3">
+        <ul className="divide-y divide-white/50">
           {entries.map((entry, idx) => (
-            <li
-              key={entry.userId}
-              className={cn(
-                'rounded-md border border-white/60 bg-white/70 p-3 shadow-[0_3px_10px_rgba(0,0,0,0.06)]',
-                entry.isYou && 'ring-2 ring-accent'
-              )}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-semibold text-textSecondary w-5 text-center">{idx + 1}</span>
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold">
-                      {entry.displayName}
-                      {entry.isYou && <span className="ml-1 text-xs text-accent">(you)</span>}
-                    </p>
-                    <p className="text-xs text-textSecondary">
-                      {entry.win ? `${entry.guessesUsed}/6 guesses` : 'Did not solve'} · {formatTime(entry.timeMs)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-2 space-y-1">
-                {entry.evaluations.map((rowEval, r) => (
-                  <div key={r} className="flex gap-1 justify-start">
-                    {rowEval.map((state, c) => (
-                      <MaskedTile key={c} state={state} />
-                    ))}
-                  </div>
-                ))}
-              </div>
+            <li key={entry.userId}>
+              <button
+                type="button"
+                onClick={() => setOpenEntry(entry)}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-md px-1 py-2 text-left transition-colors',
+                  'hover:bg-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+                  entry.isYou && 'bg-accent/10'
+                )}
+              >
+                <span className="w-6 text-center text-sm font-semibold tabular-nums text-textSecondary">
+                  {idx + 1}
+                </span>
+                <p className="min-w-0 flex-1 truncate font-semibold">
+                  {entry.displayName}
+                  {entry.isYou && <span className="ml-1 text-xs text-accent">(you)</span>}
+                </p>
+                <span className="shrink-0 text-sm tabular-nums text-textSecondary">
+                  {entry.win ? `${entry.guessesUsed}/6` : '—'}
+                </span>
+              </button>
             </li>
           ))}
         </ul>
       )}
+
+      <Dialog open={openEntry !== null} onOpenChange={(o) => !o && setOpenEntry(null)}>
+        <DialogContent>
+          {openEntry && (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {openEntry.displayName}
+                  {openEntry.isYou && <span className="ml-2 text-xs text-accent">(you)</span>}
+                </DialogTitle>
+                <DialogDescription>
+                  {openIdx >= 0 && <>#{openIdx + 1} · </>}
+                  {openEntry.win ? `${openEntry.guessesUsed}/6 guesses` : 'Did not solve'} ·{' '}
+                  {formatTime(openEntry.timeMs)}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="mt-4 space-y-1">
+                {openEntry.evaluations.length === 0 ? (
+                  <p className="text-sm text-textSecondary">No guesses recorded.</p>
+                ) : (
+                  openEntry.evaluations.map((rowEval, r) => (
+                    <div key={r} className="flex justify-center gap-1">
+                      {rowEval.map((state, c) => (
+                        <MaskedTile key={c} state={state} />
+                      ))}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <DialogFooter className="mt-5">
+                <DialogClose asChild>
+                  <Button variant="ghost" size="sm">
+                    Close
+                  </Button>
+                </DialogClose>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -70,7 +114,7 @@ function MaskedTile({ state }: { state: LetterEval }) {
     absent: 'bg-keycap',
     unknown: 'bg-white/40'
   };
-  return <div className={cn('h-4 w-4 rounded-sm', color[state])} />;
+  return <div className={cn('h-6 w-6 rounded-sm', color[state])} />;
 }
 
 function formatTime(ms: number): string {

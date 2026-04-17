@@ -4,8 +4,65 @@
 @tailwind components;
 @tailwind utilities;
 
+/* =======================================================================
+   Forest palette
+   ----------------------------------------------------------------------
+   dust-grey    #DAD7CD   hsl( 46 15% 83%)   lightest neutral
+   dry-sage     #A3B18A   hsl( 82 20% 62%)   mid warm green
+   fern         #588157   hsl(119 19% 42%)   accent / action
+   hunter-green #3A5A40   hsl(131 22% 29%)   primary
+   pine-teal    #344E41   hsl(150 20% 25%)   darkest, text
+   ======================================================================= */
+
 :root {
   color-scheme: light;
+
+  /* Brand scale — single source of truth */
+  --brand-dust:   46 15% 83%;
+  --brand-sage:   82 20% 62%;
+  --brand-fern:  119 19% 42%;
+  --brand-hunter:131 22% 29%;
+  --brand-pine:  150 20% 25%;
+
+  /* Lighter wash of dust for page background so keycap/absent tiles still read */
+  --brand-mist:   46 15% 95%;
+  --brand-white:  46 20% 98%;
+
+  /* shadcn tokens (consumed by ui/ components via hsl(var(--token))) */
+  --background: var(--brand-mist);
+  --foreground: var(--brand-pine);
+
+  --card: var(--brand-white);
+  --card-foreground: var(--brand-pine);
+
+  --popover: var(--brand-white);
+  --popover-foreground: var(--brand-pine);
+
+  --primary: var(--brand-hunter);
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: var(--brand-sage);
+  --secondary-foreground: var(--brand-pine);
+
+  --muted: var(--brand-dust);
+  --muted-foreground: var(--brand-hunter);
+
+  --accent: var(--brand-fern);
+  --accent-foreground: 0 0% 100%;
+
+  --destructive: 0 72% 45%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 82 15% 78%;
+  --input:  82 15% 78%;
+  --ring:   var(--brand-fern);
+
+  --radius: 16px;
+
+  /* Semantic helpers also consumed by Tailwind's theme.extend */
+  --color-success: var(--brand-fern);
+  --color-warning: 35 70% 52%;           /* amber — palette has no warm, keep "present" distinct from "correct" */
+  --color-keycap:  var(--brand-dust);
 }
 
 * {
@@ -15,8 +72,12 @@
 body {
   margin: 0;
   font-family: 'Atkinson Hyperlegible', system-ui, -apple-system, sans-serif;
-  background: linear-gradient(180deg, #f7f9ff 0%, #eef3ff 60%, #fef7fb 100%);
-  color: #1f2837;
+  background:
+    linear-gradient(180deg,
+      hsl(var(--brand-white)) 0%,
+      hsl(var(--brand-mist))  55%,
+      hsl(var(--brand-dust) / 0.7) 100%);
+  color: hsl(var(--foreground));
 }
 
 button {
@@ -24,8 +85,8 @@ button {
 }
 
 @keyframes flip {
-  0% { transform: rotateX(0deg); }
-  50% { transform: rotateX(90deg); }
+  0%   { transform: rotateX(0deg); }
+  50%  { transform: rotateX(90deg); }
   100% { transform: rotateX(0deg); }
 }
 

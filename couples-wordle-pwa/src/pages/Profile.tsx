@@ -1,25 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Card } from '../components/Card';
-import { Button } from '../components/Button';
-import { Layout } from '../components/Layout';
-import { StreakCard } from '../components/StreakCard';
-import { Leaderboard } from '../components/Leaderboard';
-import { useAuth } from '../context/AuthContext';
-import { fetchPuzzle } from '../lib/puzzles';
-import { fetchGameHistory, fetchLeaderboard, fetchUserStats } from '../lib/stats';
-import { getProfile, upsertDisplayName } from '../lib/profiles';
-import type { GameHistoryEntry, LeaderboardEntry, Puzzle, UserStats } from '../lib/types';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Layout } from '@/components/Layout';
+import { StreakCard } from '@/components/StreakCard';
+import { useAuth } from '@/context/AuthContext';
+import { fetchGameHistory, fetchUserStats } from '@/lib/stats';
+import { getProfile, upsertDisplayName } from '@/lib/profiles';
+import type { GameHistoryEntry, UserStats } from '@/lib/types';
 
 export function Profile() {
   const { user, signOut } = useAuth();
   const [stats, setStats] = useState<UserStats | null>(null);
   const [history, setHistory] = useState<GameHistoryEntry[]>([]);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
   const [displayName, setDisplayName] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
-  const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -31,22 +28,13 @@ export function Profile() {
         const profile = await getProfile(user.id);
         if (!cancelled) setDisplayName(profile?.displayName ?? '');
 
-        const [userStats, userHistory, todayPuzzle] = await Promise.all([
+        const [userStats, userHistory] = await Promise.all([
           fetchUserStats(user.id),
-          fetchGameHistory(user.id, 30),
-          fetchPuzzle('classic')
+          fetchGameHistory(user.id, 30)
         ]);
         if (cancelled) return;
         setStats(userStats);
         setHistory(userHistory);
-        setPuzzle(todayPuzzle);
-
-        setLeaderboardLoading(true);
-        const board = await fetchLeaderboard(todayPuzzle.id, todayPuzzle.word, user.id);
-        if (!cancelled) {
-          setLeaderboard(board);
-          setLeaderboardLoading(false);
-        }
       } catch (e: any) {
         console.error(e);
         if (!cancelled) setError(e?.message ?? 'Failed to load profile');
@@ -77,16 +65,14 @@ export function Profile() {
     <Layout>
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
-            Profile
-          </h1>
+          <h1 className="font-heading text-2xl font-bold">Profile</h1>
           <Button variant="ghost" onClick={signOut}>
             Sign out
           </Button>
         </div>
 
         {error && (
-          <Card className="bg-red-50 border-red-200">
+          <Card className="border-red-200 bg-red-50">
             <p className="text-sm text-red-700">{error}</p>
           </Card>
         )}
@@ -96,8 +82,7 @@ export function Profile() {
         <Card className="space-y-2 bg-white/80 backdrop-blur">
           <p className="text-sm text-textSecondary">Display name</p>
           <div className="flex gap-2">
-            <input
-              className="flex-1 rounded-md border border-white/60 bg-white/90 px-3 py-2 outline-none shadow-[0_4px_12px_rgba(0,0,0,0.08)]"
+            <Input
               placeholder="What should we call you?"
               value={displayName}
               onChange={(e) => {
@@ -110,7 +95,9 @@ export function Profile() {
               {savingName ? 'Saving…' : nameSaved ? 'Saved' : 'Save'}
             </Button>
           </div>
-          <p className="text-xs text-textSecondary">Shown on the leaderboard. Signed in as {user?.email ?? user?.id}.</p>
+          <p className="text-xs text-textSecondary">
+            Shown on the leaderboard. Signed in as {user?.email ?? user?.id}.
+          </p>
         </Card>
 
         <StreakCard
@@ -119,34 +106,35 @@ export function Profile() {
           totalWins={stats?.totalWins ?? null}
         />
 
-        <Leaderboard entries={leaderboard} loading={leaderboardLoading} />
-
-        <Card className="space-y-2 bg-white/80 backdrop-blur">
-          <h2 className="text-lg font-bold" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
-            Recent games
-          </h2>
-          {history.length === 0 ? (
-            <p className="text-sm text-textSecondary">No games yet. Play today&apos;s Wordle.</p>
-          ) : (
-            <ul className="divide-y divide-white/50">
-              {history.map((h) => (
-                <li key={h.id} className="flex items-center justify-between py-2 text-sm">
-                  <div>
-                    <p className="font-semibold">
-                      {h.word.toUpperCase()} <span className="text-textSecondary font-normal">· {h.date}</span>
-                    </p>
-                    <p className="text-xs text-textSecondary">
-                      {h.win ? `${h.guessesUsed}/6 guesses` : 'Did not solve'} · {formatTime(h.timeMs)}
-                      {h.hintsUsed ? ` · ${h.hintsUsed} hint${h.hintsUsed === 1 ? '' : 's'}` : ''}
-                    </p>
-                  </div>
-                  <span className={h.win ? 'text-success font-semibold' : 'text-textSecondary'}>
-                    {h.win ? 'Win' : 'Loss'}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+        <Card className="bg-white/80 backdrop-blur">
+          <CardHeader>
+            <CardTitle>Recent games</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {history.length === 0 ? (
+              <CardDescription>No games yet. Play today&apos;s Wordle.</CardDescription>
+            ) : (
+              <ul className="divide-y divide-white/50">
+                {history.map((h) => (
+                  <li key={h.id} className="flex items-center justify-between py-2 text-sm">
+                    <div>
+                      <p className="font-semibold">
+                        {h.word.toUpperCase()}{' '}
+                        <span className="text-textSecondary font-normal">· {h.date}</span>
+                      </p>
+                      <p className="text-xs text-textSecondary">
+                        {h.win ? `${h.guessesUsed}/6 guesses` : 'Did not solve'} · {formatTime(h.timeMs)}
+                        {h.hintsUsed ? ` · ${h.hintsUsed} hint${h.hintsUsed === 1 ? '' : 's'}` : ''}
+                      </p>
+                    </div>
+                    <span className={h.win ? 'text-success font-semibold' : 'text-textSecondary'}>
+                      {h.win ? 'Win' : 'Loss'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
         </Card>
       </div>
     </Layout>
@@ -164,7 +152,6 @@ function formatTime(ms: number): string {
 
 function IdentityCard() {
   const { user } = useAuth();
-  const [avatarFailed, setAvatarFailed] = useState(false);
   if (!user) return null;
 
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
@@ -172,7 +159,6 @@ function IdentityCard() {
     (typeof meta.avatar_url === 'string' ? meta.avatar_url : '') ||
     (typeof meta.picture === 'string' ? meta.picture : '') ||
     '';
-  const avatarUrl = rawAvatar && !avatarFailed ? rawAvatar : null;
   const rawName =
     (typeof meta.full_name === 'string' ? meta.full_name : '') ||
     (typeof meta.name === 'string' ? meta.name : '') ||
@@ -189,23 +175,12 @@ function IdentityCard() {
 
   return (
     <Card className="flex items-center gap-4 bg-white/80 backdrop-blur">
-      {avatarUrl ? (
-        <img
-          src={avatarUrl}
-          alt=""
-          referrerPolicy="no-referrer"
-          className="h-14 w-14 rounded-full object-cover shadow-[0_4px_12px_rgba(0,0,0,0.12)]"
-          onError={() => setAvatarFailed(true)}
-        />
-      ) : (
-        <div className="h-14 w-14 rounded-full bg-accent/20 text-accent grid place-items-center font-bold">
-          {initials}
-        </div>
-      )}
+      <Avatar className="h-14 w-14 shadow-[0_4px_12px_rgba(0,0,0,0.12)]">
+        {rawAvatar && <AvatarImage src={rawAvatar} alt="" />}
+        <AvatarFallback>{initials}</AvatarFallback>
+      </Avatar>
       <div className="min-w-0">
-        <p className="font-semibold truncate" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
-          {fullName}
-        </p>
+        <p className="font-heading font-semibold truncate">{fullName}</p>
         {user.email && <p className="text-sm text-textSecondary truncate">{user.email}</p>}
       </div>
     </Card>

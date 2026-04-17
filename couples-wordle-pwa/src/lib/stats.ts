@@ -38,7 +38,12 @@ export async function saveAttempt(args: SaveAttemptArgs): Promise<void> {
       },
       { onConflict: 'user_id,puzzle_id' }
     );
-  if (error) throw error;
+  if (error) {
+    const parts = [error.code, error.message, error.details, error.hint].filter(Boolean);
+    const full = parts.join(' · ');
+    console.error('saveAttempt error', error);
+    throw new Error(full || 'saveAttempt failed');
+  }
 }
 
 export async function fetchUserStats(userId: string): Promise<UserStats> {

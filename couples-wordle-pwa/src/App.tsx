@@ -1,19 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { Routes, Route, Link, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { Card } from './components/Card';
-import { Button } from './components/Button';
-import { Board } from './components/Board';
-import { Layout, Pill } from './components/Layout';
-import { InstallPrompt } from './components/InstallPrompt';
-import { LaneCard } from './components/LaneCard';
-import { supabase } from './lib/supabase';
-import { AuthProvider, useAuth } from './context/AuthContext';
-import { useA2HS } from './hooks/useA2HS';
-import { fetchPuzzle } from './lib/puzzles';
-import { saveAttempt } from './lib/stats';
-import type { Puzzle } from './lib/types';
+import { LogOut, User as UserIcon } from 'lucide-react';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu';
+import { Board } from '@/components/Board';
+import { Layout, Pill } from '@/components/Layout';
+import { InstallPrompt } from '@/components/InstallPrompt';
+import { Leaderboard } from '@/components/Leaderboard';
+import { supabase } from '@/lib/supabase';
+import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { useA2HS } from '@/hooks/useA2HS';
+import { fetchPuzzle } from '@/lib/puzzles';
+import { fetchLeaderboard, saveAttempt } from '@/lib/stats';
+import type { LeaderboardEntry, Puzzle } from '@/lib/types';
 import './styles/globals.css';
-import { Profile } from './pages/Profile';
+import { Profile } from '@/pages/Profile';
 
 export default function App() {
   return (
@@ -93,14 +104,12 @@ function SignIn() {
   return (
     <Layout>
       <Card className="space-y-4 bg-white/80 backdrop-blur">
-        <div>
-          <h1 className="text-2xl font-bold" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
-            Sign in to play
-          </h1>
-          <p className="text-sm text-textSecondary">You need an account to save stats and see the leaderboard.</p>
-        </div>
+        <CardHeader className="space-y-1">
+          <CardTitle>Sign in to play</CardTitle>
+          <CardDescription>You need an account to save stats and see the leaderboard.</CardDescription>
+        </CardHeader>
 
-        <Button variant="primary" onClick={signInGoogle} className="w-full">
+        <Button onClick={signInGoogle} className="w-full">
           Continue with Google
         </Button>
 
@@ -111,12 +120,11 @@ function SignIn() {
         </div>
 
         <div className="space-y-2">
-          <input
-            className="w-full rounded-md border border-white/60 bg-white/90 px-3 py-2 outline-none shadow-[0_4px_12px_rgba(0,0,0,0.08)]"
+          <Input
+            type="email"
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            type="email"
           />
           <Button onClick={sendMagic} disabled={!email} className="w-full">
             {sent ? 'Link sent — check your email' : 'Send magic link'}
@@ -133,40 +141,100 @@ function Home() {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const { shouldShow, dismiss } = useA2HS();
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const puzzle = await fetchPuzzle('classic');
+        const board = await fetchLeaderboard(puzzle.id, puzzle.word, user.id);
+        if (!cancelled) setLeaderboard(board);
+      } catch (e) {
+        console.error('leaderboard load failed', e);
+      } finally {
+        if (!cancelled) setLeaderboardLoading(false);
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   return (
     <Layout>
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
-              Daily Wordle
-            </h1>
-            <p className="text-xs text-textSecondary truncate">Signed in as {user?.email ?? user?.id}</p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => navigate('/profile')}>
-              Profile
-            </Button>
-            <Button variant="ghost" onClick={signOut}>
-              Sign out
-            </Button>
-          </div>
+      <section className="space-y-6">
+        <header className="flex justify-end">
+          <UserMenu onProfile={() => navigate('/profile')} onSignOut={signOut} />
+        </header>
+
+        <div className="flex justify-center py-6">
+          <Button size="xl" onClick={() => navigate('/play/classic')} className="min-w-[220px]">
+            Today&apos;s Wordle
+          </Button>
         </div>
 
-        <div className="grid gap-3">
-          <LaneCard
-            title="Today's Wordle"
-            description="Everyone gets the same word today. Fewest guesses wins."
-            pillLabel="5 letters"
-            variant="primary"
-            onSelect={() => navigate('/play/classic')}
-          />
-        </div>
+        <Leaderboard entries={leaderboard} loading={leaderboardLoading} />
 
         {shouldShow && <InstallPrompt onDismiss={dismiss} />}
       </section>
     </Layout>
+  );
+}
+
+function UserMenu({ onProfile, onSignOut }: { onProfile: () => void; onSignOut: () => void }) {
+  const { user } = useAuth();
+  const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
+  const avatarUrl = (meta.avatar_url as string | undefined) || (meta.picture as string | undefined) || undefined;
+  const fullName =
+    (meta.full_name as string | undefined) ||
+    (meta.name as string | undefined) ||
+    (user?.email ? user.email.split('@')[0] : 'Player');
+  const initials =
+    fullName
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((p) => p[0]?.toUpperCase() ?? '')
+      .slice(0, 2)
+      .join('') || '?';
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Open account menu"
+          className="rounded-full ring-offset-background transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2"
+        >
+          <Avatar className="h-10 w-10 shadow-[0_4px_12px_rgba(0,0,0,0.12)]">
+            {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
+            <AvatarFallback>{initials}</AvatarFallback>
+          </Avatar>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuLabel className="font-normal">
+          <div className="flex flex-col space-y-0.5">
+            <p className="text-sm font-semibold truncate">{fullName}</p>
+            {user?.email && <p className="text-xs text-textSecondary truncate">{user.email}</p>}
+          </div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onProfile}>
+          <UserIcon />
+          <span>Profile</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onSignOut}>
+          <LogOut />
+          <span>Sign out</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -232,9 +300,7 @@ function Play() {
           ← Back
         </Link>
         <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-bold" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
-            Daily Wordle
-          </h1>
+          <h1 className="font-heading text-2xl font-bold">Daily Wordle</h1>
           <Pill active label="5 letters" />
         </div>
         {error ? (
@@ -256,7 +322,7 @@ function Play() {
                 {saveError && <p className="text-xs text-textSecondary">{saveError}</p>}
               </>
             )}
-            <Button variant="primary" onClick={() => window.location.assign('/profile')}>
+            <Button onClick={() => window.location.assign('/profile')}>
               See today&apos;s leaderboard
             </Button>
           </Card>

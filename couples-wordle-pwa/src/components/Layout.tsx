@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { cn } from '../utils/cn';
+import { cn } from '@/lib/utils';
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
@@ -11,10 +11,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <header className="flex items-center justify-between">
           <div className="space-y-1">
             <p className="text-xs uppercase tracking-[0.2em] text-textSecondary">Couples Wordle</p>
-            <h1
-              className="text-2xl sm:text-3xl font-bold"
-              style={{ fontFamily: 'SF Pro Rounded, system-ui' }}
-            >
+            <h1 className="font-heading text-2xl font-bold sm:text-3xl">
               Daily puzzles for two.
             </h1>
           </div>

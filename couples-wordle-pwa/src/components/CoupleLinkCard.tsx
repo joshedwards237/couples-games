@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Card } from './Card';
-import { Button } from './Button';
-import { linkCouple } from '../lib/couples';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { linkCouple } from '@/lib/couples';
 
 interface Props {
   coupleName?: string;
@@ -27,15 +28,14 @@ export function CoupleLinkCard({ coupleName, coupleId, userEmail }: Props) {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm text-textSecondary">Couple account</p>
-          <p className="text-base font-semibold" style={{ fontFamily: 'SF Pro Rounded, system-ui' }}>
+          <p className="font-heading text-base font-semibold">
             {coupleName ?? 'Not linked yet'}
           </p>
         </div>
         {coupleId && <span className="text-xs text-accent">ID: {coupleId.slice(0, 6)}…</span>}
       </div>
       <div className="space-y-2">
-        <input
-          className="w-full rounded-md border border-white/60 bg-white/90 px-3 py-2 outline-none shadow-inner"
+        <Input
           placeholder="Partner email or phone to invite"
           value={contact}
           onChange={(e) => setContact(e.target.value)}

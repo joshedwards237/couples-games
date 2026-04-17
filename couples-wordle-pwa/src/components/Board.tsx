@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Card } from './Card';
-import { Keyboard, KeyType } from './Keyboard';
-import { cn } from '../utils/cn';
+import { Card } from '@/components/ui/card';
+import { Keyboard, KeyType } from '@/components/Keyboard';
+import { cn } from '@/lib/utils';
 
 export type LetterEval = 'correct' | 'present' | 'absent' | 'unknown';
 type KeyStateMap = Record<string, LetterEval>;

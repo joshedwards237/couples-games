@@ -1,4 +1,5 @@
-import { Card } from './Card';
+import { Card } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 interface Props {
   currentStreak?: number | null;
@@ -22,12 +23,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   return (
     <div>
       <p className="text-sm text-textSecondary">{label}</p>
-      <p
-        className={`text-2xl font-bold ${accent ? 'text-accent' : ''}`}
-        style={{ fontFamily: 'SF Pro Rounded, system-ui' }}
-      >
-        {value}
-      </p>
+      <p className={cn('font-heading text-2xl font-bold', accent && 'text-accent')}>{value}</p>
     </div>
   );
 }
