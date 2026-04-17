@@ -5,6 +5,7 @@ import type {
   GameMode,
   LeaderboardEntry,
   LetterEval,
+  MyAttempt,
   UserStats
 } from './types';
 
@@ -104,6 +105,24 @@ export async function fetchUserStats(userId: string): Promise<UserStats> {
   }
 
   return { currentStreak, maxStreak, totalWins, totalPlayed };
+}
+
+export async function fetchMyAttempt(userId: string, puzzleId: string): Promise<MyAttempt | null> {
+  const { data, error } = await supabase
+    .from('puzzle_attempts')
+    .select('rows, guesses_used, time_ms, win, finished')
+    .eq('user_id', userId)
+    .eq('puzzle_id', puzzleId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    rows: (data.rows as string[]) ?? [],
+    guessesUsed: data.guesses_used as number,
+    timeMs: data.time_ms as number,
+    win: data.win as boolean,
+    finished: data.finished as boolean
+  };
 }
 
 export async function fetchGameHistory(userId: string, limit = 30): Promise<GameHistoryEntry[]> {

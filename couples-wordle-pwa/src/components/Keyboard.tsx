@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 export type KeyType =
@@ -8,14 +9,14 @@ export type KeyType =
 interface KeyboardProps {
   onKey: (key: KeyType) => void;
   keyStates?: Record<string, 'correct' | 'present' | 'absent' | 'unknown'>;
+  /** When true, the Enter button physically jumps away on hover / touch. Relents after MAX_MOVING_EVASIONS attempts. */
+  enterMovesAway?: boolean;
 }
 
-export function Keyboard({ onKey, keyStates = {} }: KeyboardProps) {
-  const rows = [
-    Array.from('QWERTYUIOP'),
-    Array.from('ASDFGHJKL'),
-    Array.from('ZXCVBNM')
-  ];
+const MAX_MOVING_EVASIONS = 8;
+
+export function Keyboard({ onKey, keyStates = {}, enterMovesAway = false }: KeyboardProps) {
+  const rows = [Array.from('QWERTYUIOP'), Array.from('ASDFGHJKL'), Array.from('ZXCVBNM')];
 
   return (
     <div className="space-y-2">
@@ -27,12 +28,73 @@ export function Keyboard({ onKey, keyStates = {} }: KeyboardProps) {
           {row.map((l) => (
             <Key key={l} label={l} state={keyStates[l]} onClick={() => onKey({ kind: 'letter', value: l })} />
           ))}
-          {ri === rows.length - 1 && (
-            <Key label="Enter" onClick={() => onKey({ kind: 'enter' })} className="px-4" />
-          )}
+          {ri === rows.length - 1 &&
+            (enterMovesAway ? (
+              <MovingEnterKey onEnter={() => onKey({ kind: 'enter' })} />
+            ) : (
+              <Key label="Enter" onClick={() => onKey({ kind: 'enter' })} className="px-4" />
+            ))}
         </div>
       ))}
     </div>
+  );
+}
+
+function MovingEnterKey({ onEnter }: { onEnter: () => void }) {
+  const [offset, setOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const evasionsRef = useRef(0);
+  const ref = useRef<HTMLButtonElement | null>(null);
+
+  const relented = evasionsRef.current >= MAX_MOVING_EVASIONS;
+
+  const jump = () => {
+    if (relented) return;
+    evasionsRef.current += 1;
+    const isMobile = typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches;
+    const maxDx = isMobile ? 70 : 160;
+    const maxDy = isMobile ? 40 : 80;
+    const dx = (Math.random() * 2 - 1) * maxDx;
+    const dy = (Math.random() * 2 - 1) * maxDy;
+    setOffset({ x: dx, y: dy });
+  };
+
+  // Reset to origin after each move, so the keyboard layout doesn't stay wrecked.
+  useEffect(() => {
+    if (offset.x === 0 && offset.y === 0) return;
+    const t = window.setTimeout(() => setOffset({ x: 0, y: 0 }), 260);
+    return () => window.clearTimeout(t);
+  }, [offset]);
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onMouseEnter={jump}
+      onTouchStart={(e) => {
+        if (relented) return;
+        // Intercept the first-tap so click doesn't fire on the original position.
+        e.preventDefault();
+        jump();
+      }}
+      onClick={(e) => {
+        if (!relented) {
+          e.preventDefault();
+          jump();
+          return;
+        }
+        onEnter();
+      }}
+      style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
+      className={cn(
+        'relative h-11 min-w-[36px] rounded-md border px-4 text-sm font-semibold transition active:scale-[0.98]',
+        'focus:outline-none focus:ring-2 focus:ring-accent/60',
+        'bg-keycap text-textPrimary border-white/40 shadow-[0_4px_12px_rgba(0,0,0,0.1)]',
+        'duration-150 ease-out'
+      )}
+      aria-label="Enter"
+    >
+      Enter
+    </button>
   );
 }
 
@@ -48,7 +110,8 @@ function Key({
   const stateStyles: Record<typeof state, string> = {
     correct: 'bg-success text-white border-success/90 shadow-[0_5px_16px_rgba(0,0,0,0.2)]',
     present: 'bg-warning text-white border-warning/90 shadow-[0_5px_16px_rgba(0,0,0,0.2)]',
-    absent: 'bg-keycap text-textPrimary/70 border-keycap/90 shadow-[0_4px_12px_rgba(0,0,0,0.14)] opacity-80',
+    absent:
+      'bg-brand-sage/60 text-foreground/45 border-brand-sage/50 opacity-75 shadow-[0_3px_10px_rgba(0,0,0,0.1)]',
     unknown: 'bg-keycap text-textPrimary border-white/40 shadow-[0_4px_12px_rgba(0,0,0,0.1)]'
   };
 

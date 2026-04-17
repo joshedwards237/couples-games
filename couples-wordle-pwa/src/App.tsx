@@ -1,34 +1,52 @@
 import { useEffect, useRef, useState } from 'react';
-import { Routes, Route, Link, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { LogOut, User as UserIcon } from 'lucide-react';
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu';
+import { Share2 } from 'lucide-react';
 import { Board } from '@/components/Board';
-import { Layout, Pill } from '@/components/Layout';
+import { CompletedBoard } from '@/components/CompletedBoard';
+import { Layout } from '@/components/Layout';
 import { InstallPrompt } from '@/components/InstallPrompt';
+import { InviteBanner } from '@/components/InviteBanner';
 import { Leaderboard } from '@/components/Leaderboard';
+import { ShareResultDialog } from '@/components/ShareResultDialog';
+import { NarrativeOrchestrator } from '@/components/pranks/NarrativeOrchestrator';
+import { setPendingInvite } from '@/lib/couples';
 import { supabase } from '@/lib/supabase';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { PrankProvider } from '@/context/PrankContext';
 import { useA2HS } from '@/hooks/useA2HS';
 import { fetchPuzzle } from '@/lib/puzzles';
-import { fetchLeaderboard, saveAttempt } from '@/lib/stats';
-import type { LeaderboardEntry, Puzzle } from '@/lib/types';
+import { fetchLeaderboard, fetchMyAttempt, saveAttempt } from '@/lib/stats';
+import type { LeaderboardEntry, MyAttempt, Puzzle } from '@/lib/types';
 import './styles/globals.css';
 import { Profile } from '@/pages/Profile';
+import { PrankDashboard } from '@/pages/PrankDashboard';
+
+// Captured synchronously at module load — before any child useEffect runs.
+// Ordering matters: React fires useEffects child-first, so if this lived in
+// App's useEffect the InviteBanner would miss the pending id on first mount.
+if (typeof window !== 'undefined') {
+  try {
+    const url = new URL(window.location.href);
+    const inviteId = url.searchParams.get('invite');
+    if (inviteId) {
+      setPendingInvite(inviteId);
+      url.searchParams.delete('invite');
+      const cleaned =
+        url.pathname + (url.searchParams.toString() ? `?${url.searchParams}` : '') + url.hash;
+      window.history.replaceState({}, '', cleaned);
+    }
+  } catch (e) {
+    console.error('invite capture failed', e);
+  }
+}
 
 export default function App() {
   return (
     <AuthProvider>
+      <PrankProvider>
       <Routes>
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route
@@ -55,7 +73,16 @@ export default function App() {
             </AuthGate>
           }
         />
+        <Route
+          path="/prank"
+          element={
+            <AuthGate>
+              <PrankDashboard />
+            </AuthGate>
+          }
+        />
       </Routes>
+      </PrankProvider>
     </AuthProvider>
   );
 }
@@ -103,15 +130,17 @@ function SignIn() {
 
   return (
     <Layout>
-      <Card className="space-y-4 bg-white/80 backdrop-blur">
-        <CardHeader className="space-y-1">
-          <CardTitle>Sign in to play</CardTitle>
-          <CardDescription>You need an account to save stats and see the leaderboard.</CardDescription>
-        </CardHeader>
+      <div className="space-y-4">
+        <InviteBanner />
+        <Card className="space-y-4 bg-white/80 backdrop-blur">
+          <CardHeader className="space-y-1">
+            <CardTitle>Sign in to play</CardTitle>
+            <CardDescription>You need an account to save stats and see the leaderboard.</CardDescription>
+          </CardHeader>
 
-        <Button onClick={signInGoogle} className="w-full">
-          Continue with Google
-        </Button>
+          <Button onClick={signInGoogle} className="w-full">
+            Continue with Google
+          </Button>
 
         <div className="flex items-center gap-2 text-xs text-textSecondary">
           <div className="h-px flex-1 bg-white/60" />
@@ -131,18 +160,20 @@ function SignIn() {
           </Button>
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
-      </Card>
+          {error && <p className="text-sm text-red-600">{error}</p>}
+        </Card>
+      </div>
     </Layout>
   );
 }
 
 function Home() {
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const { shouldShow, dismiss } = useA2HS();
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [finishedToday, setFinishedToday] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -151,10 +182,15 @@ function Home() {
     const load = async () => {
       try {
         const puzzle = await fetchPuzzle('classic');
-        const board = await fetchLeaderboard(puzzle.id, puzzle.word, user.id);
-        if (!cancelled) setLeaderboard(board);
+        const [board, myAttempt] = await Promise.all([
+          fetchLeaderboard(puzzle.id, puzzle.word, user.id),
+          fetchMyAttempt(user.id, puzzle.id)
+        ]);
+        if (cancelled) return;
+        setLeaderboard(board);
+        setFinishedToday(Boolean(myAttempt?.finished));
       } catch (e) {
-        console.error('leaderboard load failed', e);
+        console.error('home load failed', e);
       } finally {
         if (!cancelled) setLeaderboardLoading(false);
       }
@@ -169,13 +205,11 @@ function Home() {
   return (
     <Layout>
       <section className="space-y-6">
-        <header className="flex justify-end">
-          <UserMenu onProfile={() => navigate('/profile')} onSignOut={signOut} />
-        </header>
+        <InviteBanner />
 
         <div className="flex justify-center py-6">
           <Button size="xl" onClick={() => navigate('/play/classic')} className="min-w-[220px]">
-            Today&apos;s Wordle
+            {finishedToday ? 'View your attempt' : "Today's Wordle"}
           </Button>
         </div>
 
@@ -187,92 +221,65 @@ function Home() {
   );
 }
 
-function UserMenu({ onProfile, onSignOut }: { onProfile: () => void; onSignOut: () => void }) {
-  const { user } = useAuth();
-  const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
-  const avatarUrl = (meta.avatar_url as string | undefined) || (meta.picture as string | undefined) || undefined;
-  const fullName =
-    (meta.full_name as string | undefined) ||
-    (meta.name as string | undefined) ||
-    (user?.email ? user.email.split('@')[0] : 'Player');
-  const initials =
-    fullName
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((p) => p[0]?.toUpperCase() ?? '')
-      .slice(0, 2)
-      .join('') || '?';
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Open account menu"
-          className="rounded-full ring-offset-background transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2"
-        >
-          <Avatar className="h-10 w-10 shadow-[0_4px_12px_rgba(0,0,0,0.12)]">
-            {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
-            <AvatarFallback>{initials}</AvatarFallback>
-          </Avatar>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel className="font-normal">
-          <div className="flex flex-col space-y-0.5">
-            <p className="text-sm font-semibold truncate">{fullName}</p>
-            {user?.email && <p className="text-xs text-textSecondary truncate">{user.email}</p>}
-          </div>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={onProfile}>
-          <UserIcon />
-          <span>Profile</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onSignOut}>
-          <LogOut />
-          <span>Sign out</span>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+interface PlayResult {
+  win: boolean;
+  guesses: number;
+  timeMs: number;
+  answer: string;
+  rows: string[];
 }
 
 function Play() {
+  const navigate = useNavigate();
   const { pathname } = useLocation();
   const lane = pathname.endsWith('couple') ? 'couple' : 'classic';
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
-  const [done, setDone] = useState(false);
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [existingAttempt, setExistingAttempt] = useState<MyAttempt | null>(null);
+  const [result, setResult] = useState<PlayResult | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [shareOpen, setShareOpen] = useState(false);
   const { user } = useAuth();
   const startedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
       try {
         const p = await fetchPuzzle(lane as 'classic' | 'couple');
+        if (cancelled) return;
         setPuzzle(p);
-        startedAtRef.current = Date.now();
+        const existing = user ? await fetchMyAttempt(user.id, p.id) : null;
+        if (cancelled) return;
+        if (existing?.finished) {
+          setExistingAttempt(existing);
+        } else {
+          startedAtRef.current = Date.now();
+        }
       } catch (e: any) {
-        console.error(e);
-        setError(e?.message ?? 'Failed to load puzzle');
+        if (!cancelled) {
+          console.error(e);
+          setError(e?.message ?? 'Failed to load puzzle');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
     void load();
-  }, [lane]);
+    return () => {
+      cancelled = true;
+    };
+  }, [lane, user]);
 
   const handleComplete = async ({ win, rows }: { win: boolean; rows: string[] }) => {
-    setDone(true);
-    if (!user || !puzzle) {
-      setSaveState('error');
-      setSaveError(!user ? 'You are signed out — not saved.' : 'Puzzle not loaded — nothing to save.');
+    if (!puzzle) return;
+    const timeMs = startedAtRef.current ? Date.now() - startedAtRef.current : 0;
+    setResult({ win, guesses: rows.length, timeMs, answer: puzzle.word, rows });
+    if (!user) {
+      setSaveError('You are signed out — not saved.');
       return;
     }
-    const timeMs = startedAtRef.current ? Date.now() - startedAtRef.current : 0;
-    setSaveState('saving');
-    setSaveError(null);
     try {
       await saveAttempt({
         userId: user.id,
@@ -285,51 +292,84 @@ function Play() {
         win,
         finished: true
       });
-      setSaveState('saved');
     } catch (e: any) {
       console.error('saveAttempt failed', e);
-      setSaveState('error');
       setSaveError(e?.message ?? 'Save failed');
     }
   };
 
+  const summary: PlayResult | null = result
+    ? result
+    : existingAttempt && puzzle
+      ? {
+          win: existingAttempt.win,
+          guesses: existingAttempt.guessesUsed,
+          timeMs: existingAttempt.timeMs,
+          answer: puzzle.word,
+          rows: existingAttempt.rows
+        }
+      : null;
+
   return (
     <Layout>
       <div className="space-y-4">
-        <Link to="/" className="text-sm text-accent">
-          ← Back
-        </Link>
-        <div className="flex items-center gap-2">
-          <h1 className="font-heading text-2xl font-bold">Daily Wordle</h1>
-          <Pill active label="5 letters" />
-        </div>
         {error ? (
           <Card>
             <p className="text-sm text-red-600">{error}</p>
           </Card>
-        ) : puzzle ? (
-          <Board answer={puzzle.word} onComplete={handleComplete} />
-        ) : (
+        ) : loading || !puzzle ? (
           <Card>Loading puzzle…</Card>
+        ) : existingAttempt ? (
+          <CompletedBoard answer={puzzle.word} rows={existingAttempt.rows} />
+        ) : (
+          <Board answer={puzzle.word} onComplete={handleComplete} />
         )}
-        {done && (
-          <Card className="text-center space-y-2 bg-white/80 backdrop-blur">
-            {saveState === 'saving' && <p className="font-semibold">Saving…</p>}
-            {saveState === 'saved' && <p className="font-semibold">Saved to your profile.</p>}
-            {saveState === 'error' && (
-              <>
-                <p className="font-semibold text-red-600">Could not save your game.</p>
-                {saveError && <p className="text-xs text-textSecondary">{saveError}</p>}
-              </>
-            )}
-            <Button onClick={() => window.location.assign('/profile')}>
-              See today&apos;s leaderboard
-            </Button>
+        {summary && (
+          <Card className="flex flex-wrap items-center justify-between gap-3 bg-white/80 backdrop-blur">
+            <div className="min-w-0">
+              <p className="font-semibold">
+                {summary.win
+                  ? `Solved in ${summary.guesses} ${summary.guesses === 1 ? 'guess' : 'guesses'} · ${formatTime(summary.timeMs)}`
+                  : `Out of guesses — answer was ${summary.answer.toUpperCase()}`}
+              </p>
+              {saveError && <p className="text-xs text-red-600">Couldn&apos;t save: {saveError}</p>}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="icon"
+                aria-label="Share result"
+                onClick={() => setShareOpen(true)}
+              >
+                <Share2 />
+              </Button>
+              <Button onClick={() => navigate('/')}>See today&apos;s leaderboard</Button>
+            </div>
           </Card>
+        )}
+        {summary?.win && <NarrativeOrchestrator key="narrative-pranks" guessesUsed={summary.guesses} />}
+        {summary && puzzle && (
+          <ShareResultDialog
+            open={shareOpen}
+            onOpenChange={setShareOpen}
+            answer={summary.answer}
+            rows={summary.rows}
+            win={summary.win}
+            date={puzzle.date}
+          />
         )}
       </div>
     </Layout>
   );
+}
+
+function formatTime(ms: number): string {
+  if (!ms) return '—';
+  const seconds = Math.round(ms / 1000);
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m === 0) return `${s}s`;
+  return `${m}m ${s}s`;
 }
 
 function AuthCallback() {

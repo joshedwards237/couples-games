@@ -366,3 +366,307 @@ insert into public.word_pool (word) values
 ('WOMAN'),('WOMEN'),('WORLD'),('WORRY'),('WORSE'),('WORST'),('WORTH'),('WOULD'),('WOUND'),('WRITE'),
 ('WRONG'),('WROTE'),('YIELD'),('YOUNG'),('YOUTH'),('ZEBRA'),('ZESTY')
 on conflict (word) do nothing;
+
+-- =========================================================================
+-- Couples + invitations
+-- =========================================================================
+create table if not exists public.couples (
+  id uuid primary key default gen_random_uuid(),
+  name text,
+  created_by uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+alter table public.couples enable row level security;
+
+drop policy if exists "couples readable by members" on public.couples;
+create policy "couples readable by members"
+  on public.couples for select
+  to authenticated
+  using (
+    exists (
+      select 1 from public.couple_members cm
+      where cm.couple_id = couples.id and cm.user_id = auth.uid()
+    )
+  );
+
+-- couple_members: unique(user_id) so a user can only be in one couple.
+create table if not exists public.couple_members (
+  couple_id uuid not null references public.couples(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null default 'member' check (role in ('creator', 'member')),
+  joined_at timestamptz not null default now(),
+  primary key (couple_id, user_id)
+);
+
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'couple_members_user_id_unique') then
+    alter table public.couple_members add constraint couple_members_user_id_unique unique (user_id);
+  end if;
+end $$;
+
+alter table public.couple_members enable row level security;
+
+drop policy if exists "couple_members readable by couple" on public.couple_members;
+create policy "couple_members readable by couple"
+  on public.couple_members for select
+  to authenticated
+  using (
+    user_id = auth.uid() or exists (
+      select 1 from public.couple_members cm
+      where cm.couple_id = couple_members.couple_id and cm.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "couple_members delete own" on public.couple_members;
+create policy "couple_members delete own"
+  on public.couple_members for delete
+  to authenticated
+  using (user_id = auth.uid());
+
+-- RPC: create a new couple, auto-enroll creator. Rejects if already in a couple.
+create or replace function public.create_couple(p_name text default null)
+returns public.couples
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_couple public.couples;
+begin
+  if v_user_id is null then raise exception 'not authenticated'; end if;
+  if exists (select 1 from public.couple_members where user_id = v_user_id) then
+    raise exception 'already in a couple';
+  end if;
+  insert into public.couples (name, created_by)
+  values (nullif(trim(p_name), ''), v_user_id)
+  returning * into v_couple;
+  insert into public.couple_members (couple_id, user_id, role)
+  values (v_couple.id, v_user_id, 'creator');
+  return v_couple;
+end;
+$$;
+
+grant execute on function public.create_couple(text) to authenticated;
+
+-- RPC: join an existing couple by id. Idempotent for own membership.
+create or replace function public.join_couple(p_couple_id uuid)
+returns public.couples
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_couple public.couples;
+  v_member_count int;
+begin
+  if v_user_id is null then raise exception 'not authenticated'; end if;
+  select * into v_couple from public.couples where id = p_couple_id;
+  if v_couple.id is null then raise exception 'couple not found'; end if;
+
+  if exists (
+    select 1 from public.couple_members
+    where couple_id = v_couple.id and user_id = v_user_id
+  ) then
+    return v_couple;
+  end if;
+
+  if exists (select 1 from public.couple_members where user_id = v_user_id) then
+    raise exception 'already in a different couple';
+  end if;
+
+  select count(*)::int into v_member_count
+  from public.couple_members where couple_id = v_couple.id;
+  if v_member_count >= 2 then raise exception 'couple is full'; end if;
+
+  insert into public.couple_members (couple_id, user_id, role)
+  values (v_couple.id, v_user_id, 'member');
+  return v_couple;
+end;
+$$;
+
+grant execute on function public.join_couple(uuid) to authenticated;
+
+-- RPC: leave the current couple. Deletes couple when last member leaves.
+create or replace function public.leave_couple()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_couple_id uuid;
+  v_remaining int;
+begin
+  if v_user_id is null then raise exception 'not authenticated'; end if;
+  select couple_id into v_couple_id from public.couple_members where user_id = v_user_id;
+  if v_couple_id is null then return; end if;
+  delete from public.couple_members where user_id = v_user_id;
+  select count(*)::int into v_remaining from public.couple_members where couple_id = v_couple_id;
+  if v_remaining = 0 then
+    delete from public.couples where id = v_couple_id;
+  end if;
+end;
+$$;
+
+grant execute on function public.leave_couple() to authenticated;
+
+-- RPC: couple preview (safe for pre-signin invite landing pages).
+-- Exposes only creator's display_name + whether the couple has capacity.
+create or replace function public.get_couple_preview(p_couple_id uuid)
+returns table (id uuid, creator_display_name text, member_count int, is_full boolean)
+language plpgsql
+security definer
+set search_path = public
+stable
+as $$
+begin
+  return query
+  select
+    c.id,
+    coalesce(p.display_name, '') as creator_display_name,
+    (select count(*)::int from public.couple_members where couple_id = c.id) as member_count,
+    (select count(*) from public.couple_members where couple_id = c.id) >= 2 as is_full
+  from public.couples c
+  left join public.profiles p on p.user_id = c.created_by
+  where c.id = p_couple_id;
+end;
+$$;
+
+grant execute on function public.get_couple_preview(uuid) to anon, authenticated;
+
+-- =========================================================================
+-- Prank system — admin-only dashboard at /prank controls per-prank
+-- config, probability, thresholds, and per-user exemptions. All tables are
+-- readable by authenticated users (client needs settings to decide whether
+-- to fire); writes are admin-only via the is_prank_admin() helper.
+-- =========================================================================
+
+create table if not exists public.prank_admins (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+alter table public.prank_admins enable row level security;
+alter table public.prank_admins force row level security;
+revoke all on public.prank_admins from public, anon;
+grant select on public.prank_admins to authenticated;
+
+drop policy if exists "prank_admins readable by authenticated" on public.prank_admins;
+create policy "prank_admins readable by authenticated"
+  on public.prank_admins for select
+  to authenticated
+  using (true);
+
+create or replace function public.is_prank_admin(u uuid)
+returns boolean language sql stable security definer set search_path = public as
+$$ select exists(select 1 from public.prank_admins where user_id = u) $$;
+
+grant execute on function public.is_prank_admin(uuid) to authenticated;
+
+-- -------------------------------------------------------------------------
+-- prank_config — one row per prank_key. Admin dashboard is the only writer.
+-- -------------------------------------------------------------------------
+create table if not exists public.prank_config (
+  prank_key           text primary key,
+  enabled             boolean not null default false,
+  probability         numeric not null default 1 check (probability >= 0 and probability <= 1),
+  trigger_max_guesses int not null default 2 check (trigger_max_guesses between 1 and 6),
+  fire_same_session   boolean not null default false,
+  fire_next_day       boolean not null default true,
+  updated_at          timestamptz not null default now()
+);
+
+create or replace function public.tg_prank_config_set_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists prank_config_set_updated_at on public.prank_config;
+create trigger prank_config_set_updated_at
+before update on public.prank_config
+for each row execute function public.tg_prank_config_set_updated_at();
+
+alter table public.prank_config enable row level security;
+alter table public.prank_config force row level security;
+revoke all on public.prank_config from public, anon;
+grant select on public.prank_config to authenticated;
+grant insert, update, delete on public.prank_config to authenticated; -- RLS policy still gates actual writes to admins
+
+drop policy if exists "prank_config readable by authenticated" on public.prank_config;
+create policy "prank_config readable by authenticated"
+  on public.prank_config for select
+  to authenticated
+  using (true);
+
+drop policy if exists "prank_config writable by admins" on public.prank_config;
+create policy "prank_config writable by admins"
+  on public.prank_config for all
+  to authenticated
+  using (public.is_prank_admin(auth.uid()))
+  with check (public.is_prank_admin(auth.uid()));
+
+-- -------------------------------------------------------------------------
+-- prank_exemptions — users who are never targeted by a given prank.
+-- -------------------------------------------------------------------------
+create table if not exists public.prank_exemptions (
+  user_id   uuid not null references auth.users(id) on delete cascade,
+  prank_key text not null references public.prank_config(prank_key) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, prank_key)
+);
+
+alter table public.prank_exemptions enable row level security;
+alter table public.prank_exemptions force row level security;
+revoke all on public.prank_exemptions from public, anon;
+grant select on public.prank_exemptions to authenticated;
+grant insert, update, delete on public.prank_exemptions to authenticated;
+
+drop policy if exists "prank_exemptions readable by authenticated" on public.prank_exemptions;
+create policy "prank_exemptions readable by authenticated"
+  on public.prank_exemptions for select
+  to authenticated
+  using (true);
+
+drop policy if exists "prank_exemptions writable by admins" on public.prank_exemptions;
+create policy "prank_exemptions writable by admins"
+  on public.prank_exemptions for all
+  to authenticated
+  using (public.is_prank_admin(auth.uid()))
+  with check (public.is_prank_admin(auth.uid()));
+
+-- -------------------------------------------------------------------------
+-- Seed all known prank keys. Idempotent via ON CONFLICT DO NOTHING, so
+-- existing tuned rows keep their values across re-runs.
+-- -------------------------------------------------------------------------
+insert into public.prank_config (prank_key, fire_same_session, fire_next_day) values
+  -- instant (timing flags ignored for this category, default false/true is fine)
+  ('moving_enter',          false, false),
+  ('wrong_answer_reveal',   false, false),
+  ('impostor_badge',        false, false),
+  -- slow-burn
+  ('autocorrect_sabotage',  false, true),
+  ('reverse_keystrokes',    false, true),
+  ('tile_rebellion',        false, true),
+  -- narrative
+  ('partner_reaction',      false, false),
+  ('tiles_spell_message',   false, false),
+  ('suspicious_activity',   false, false),
+  ('reveal_rewrite',        false, false),
+  ('false_positive',        false, false),
+  ('instant_dm',            false, false),
+  ('sudden_dark_mode',      false, false),
+  ('retractable_score',     false, false)
+on conflict (prank_key) do nothing;
+
+-- Bootstrap the primary admin. Runs only if the user has signed in at
+-- least once (the auth.users row exists); otherwise silently no-ops.
+insert into public.prank_admins (user_id)
+select id from auth.users where email = 'blackbeltjje@gmail.com'
+on conflict (user_id) do nothing;

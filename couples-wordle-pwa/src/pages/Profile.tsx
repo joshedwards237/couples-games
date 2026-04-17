@@ -1,17 +1,22 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Layout } from '@/components/Layout';
 import { StreakCard } from '@/components/StreakCard';
+import { CoupleCard } from '@/components/CoupleCard';
 import { useAuth } from '@/context/AuthContext';
 import { fetchGameHistory, fetchUserStats } from '@/lib/stats';
 import { getProfile, upsertDisplayName } from '@/lib/profiles';
+import { usePranks } from '@/context/PrankContext';
 import type { GameHistoryEntry, UserStats } from '@/lib/types';
 
 export function Profile() {
   const { user, signOut } = useAuth();
+  const navigate = useNavigate();
+  const { isAdmin } = usePranks();
   const [stats, setStats] = useState<UserStats | null>(null);
   const [history, setHistory] = useState<GameHistoryEntry[]>([]);
   const [displayName, setDisplayName] = useState('');
@@ -66,9 +71,16 @@ export function Profile() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="font-heading text-2xl font-bold">Profile</h1>
-          <Button variant="ghost" onClick={signOut}>
-            Sign out
-          </Button>
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <Button variant="outline" size="sm" onClick={() => navigate('/prank')}>
+                Prank dashboard
+              </Button>
+            )}
+            <Button variant="ghost" onClick={signOut}>
+              Sign out
+            </Button>
+          </div>
         </div>
 
         {error && (
@@ -105,6 +117,8 @@ export function Profile() {
           maxStreak={stats?.maxStreak ?? null}
           totalWins={stats?.totalWins ?? null}
         />
+
+        <CoupleCard />
 
         <Card className="bg-white/80 backdrop-blur">
           <CardHeader>

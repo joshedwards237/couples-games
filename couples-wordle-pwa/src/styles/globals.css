@@ -91,6 +91,15 @@ button {
 }
 
 .animate-flip {
-  animation: flip 0.5s ease;
+  animation: flip 0.3s ease both;
   transform-style: preserve-3d;
+}
+
+@keyframes tile-fall {
+  0%   { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+  100% { transform: translate(calc(var(--tile-fall-drift, 0px)), 110vh) rotate(540deg); opacity: 0; }
+}
+
+.animate-tile-fall {
+  animation: tile-fall 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
 }

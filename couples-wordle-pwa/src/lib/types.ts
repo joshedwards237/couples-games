@@ -28,6 +28,14 @@ export interface GameHistoryEntry {
   createdAt: string;
 }
 
+export interface MyAttempt {
+  rows: string[];
+  guessesUsed: number;
+  timeMs: number;
+  win: boolean;
+  finished: boolean;
+}
+
 export interface UserStats {
   currentStreak: number;
   maxStreak: number;
@@ -49,4 +57,31 @@ export interface LeaderboardEntry {
 export interface Profile {
   userId: string;
   displayName: string;
+}
+
+export interface Couple {
+  id: string;
+  name: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface CoupleMember {
+  coupleId: string;
+  userId: string;
+  role: 'creator' | 'member';
+  joinedAt: string;
+  displayName: string | null;
+}
+
+export interface MyCouple {
+  couple: Couple;
+  members: CoupleMember[];
+}
+
+export interface CouplePreview {
+  id: string;
+  creatorDisplayName: string;
+  memberCount: number;
+  isFull: boolean;
 }
