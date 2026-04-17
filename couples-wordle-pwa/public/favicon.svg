@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Couples Wordle">
+  <title>Couples Wordle</title>
+
+  <!-- forest bubble -->
+  <rect width="64" height="64" rx="14" fill="#3A5A40"/>
+
+  <!-- subtle inner glow so the tile feels embedded in the bubble -->
+  <rect x="6" y="6" width="52" height="52" rx="11" fill="#344E41"/>
+
+  <!-- Wordle-style letter tile -->
+  <rect x="14" y="14" width="36" height="36" rx="6"
+        fill="#588157" stroke="#A3B18A" stroke-width="1"/>
+
+  <!-- bold W — polygon so it renders identically in every SVG rasterizer -->
+  <polygon fill="#FFFFFF"
+           points="19,21 24,21 27,38 31,25 33,25 37,38 40,21 45,21 41,46 36,46 32,32 28,46 23,46"/>
+</svg>

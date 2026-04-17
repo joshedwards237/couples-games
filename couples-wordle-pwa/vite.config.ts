@@ -12,17 +12,18 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['apple-touch-icon.png'],
+      registerType: 'prompt',
+      includeAssets: ['apple-touch-icon.png', 'favicon.svg', 'favicon-32.png'],
       manifest: {
         name: 'Couples Wordle',
         short_name: 'CoupleWordle',
         description: 'Daily Wordle-style ritual for couples.',
-        theme_color: '#f7f9ff',
-        background_color: '#f7f9ff',
+        theme_color: '#3A5A40',
+        background_color: '#F1F2EC',
         display: 'standalone',
         start_url: '/',
         icons: [
+          { src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml' },
           { src: '/pwa-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/pwa-512.png', sizes: '512x512', type: 'image/png' },
           { src: '/pwa-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
