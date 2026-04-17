@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { usePranks } from '@/context/PrankContext';
 import { hadFastWinThisSession, wasFastWinYesterday, PRANK_DEFS } from '@/lib/pranks';
@@ -6,15 +6,41 @@ import { hadFastWinThisSession, wasFastWinYesterday, PRANK_DEFS } from '@/lib/pr
 /**
  * Returns the set of slow-burn prank keys that should be applied for the
  * current user right now. A prank is active if its config has
- * `fire_next_day` on and the user fast-won yesterday, OR `fire_same_session`
- * on and the user fast-won earlier this session.
+ * `fire_next_day` on and the user fast-won yesterday, OR
+ * `fire_same_session` on and the user fast-won earlier this session.
  *
  * Admins always get an empty set (no self-trolling).
+ *
+ * Rolls once per user per stable-config-snapshot: we key the effect on
+ * a string digest of the slow-burn-relevant fields so admin tweaks to
+ * unrelated pranks don't re-roll dice or burn Supabase round trips.
  */
 export function useActiveSlowBurns(): Set<string> {
   const { user } = useAuth();
   const { config, isAdmin, loading: prankLoading } = usePranks();
   const [active, setActive] = useState<Set<string>>(new Set());
+
+  // Build a stable string key from the slow-burn configs. Effect only
+  // re-runs if one of these primitive values actually changes — not on
+  // every PrankProvider re-render.
+  const configKey = useMemo(() => {
+    const slowBurns = PRANK_DEFS.filter((d) => d.category === 'slow-burn');
+    return slowBurns
+      .map((d) => {
+        const s = config[d.key];
+        if (!s) return `${d.key}:-`;
+        return [
+          d.key,
+          s.enabled ? '1' : '0',
+          s.probability.toFixed(3),
+          s.triggerMaxGuesses,
+          s.fireSameSession ? '1' : '0',
+          s.fireNextDay ? '1' : '0',
+          s.exemptUserIds.slice().sort().join('|')
+        ].join(':');
+      })
+      .join(';');
+  }, [config]);
 
   useEffect(() => {
     if (!user || isAdmin || prankLoading) {
@@ -31,7 +57,6 @@ export function useActiveSlowBurns(): Set<string> {
         const settings = config[def.key];
         if (!settings?.enabled) continue;
         if (settings.exemptUserIds.includes(user.id)) continue;
-        // Probability gate: rolled once per session per prank.
         if (Math.random() >= settings.probability) continue;
 
         if (settings.fireSameSession && hadFastWinThisSession(user.id)) {
@@ -52,7 +77,11 @@ export function useActiveSlowBurns(): Set<string> {
     return () => {
       cancelled = true;
     };
-  }, [user, isAdmin, prankLoading, config]);
+    // Deps intentionally do NOT include the config object — only the
+    // derived configKey string. Admin toggling an unrelated prank won't
+    // re-roll these dice.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, isAdmin, prankLoading, configKey]);
 
   return active;
 }

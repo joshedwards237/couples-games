@@ -18,10 +18,19 @@ set -euo pipefail
 #   ./deploy.sh --skip-schema   # ignore schema drift warning even if detected
 #   ./deploy.sh --help
 #
-# Supabase admin DB URL (only needed when applying schema) is read in order:
-#   1. $SUPABASE_DB_URL env var already exported
-#   2. .env.deploy at the repo root (gitignored) with `SUPABASE_DB_URL=postgresql://...`
-#   3. Interactive prompt
+# Supabase admin DB credentials (only needed when applying schema) — accepts
+# EITHER of the following in .env.deploy (gitignored) or in the environment:
+#
+#   (preferred, avoids URL-encoding headaches with special-char passwords)
+#     PGHOST=aws-0-<region>.pooler.supabase.com
+#     PGPORT=6543
+#     PGUSER=postgres.<project-ref>
+#     PGDATABASE=postgres
+#     PGPASSWORD=your-raw-password
+#
+#   (legacy — auto-parsed via node URL so special chars still work if you
+#    percent-encode the password)
+#     SUPABASE_DB_URL=postgresql://user:pass@host:port/db
 # ============================================================================
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -117,23 +126,50 @@ ok "vite build succeeded"
 if [[ "$APPLY_SCHEMA" = true ]]; then
   hr "Supabase schema"
 
-  if [[ -z "${SUPABASE_DB_URL:-}" && -f "$DEPLOY_ENV_FILE" ]]; then
+  # Load .env.deploy if present so PG* / SUPABASE_DB_URL populate the env.
+  if [[ -f "$DEPLOY_ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     set -a; source "$DEPLOY_ENV_FILE"; set +a
   fi
 
-  if [[ -z "${SUPABASE_DB_URL:-}" ]]; then
-    warn "SUPABASE_DB_URL not set"
-    echo "   Add it to $DEPLOY_ENV_FILE (gitignored) or export it."
-    echo "   Copy from Supabase → Settings → Database → Connection string (URI, pooler ok)."
-    read -r -p "   paste SUPABASE_DB_URL now (or Ctrl-C to cancel): " SUPABASE_DB_URL
-    [[ -n "$SUPABASE_DB_URL" ]] || fail "no SUPABASE_DB_URL provided"
+  # If individual PG* vars aren't set but SUPABASE_DB_URL is, parse the URL
+  # via node (which URL-decodes the userinfo correctly — bash parsing breaks
+  # on passwords containing :/@#?&%).
+  if [[ -z "${PGHOST:-}" && -n "${SUPABASE_DB_URL:-}" ]]; then
+    command -v node >/dev/null || fail "node required to parse SUPABASE_DB_URL"
+    # Emit shell-safe KEY='value' lines; eval to export.
+    # shellcheck disable=SC2046
+    eval "$(node -e '
+      const u = new URL(process.argv[1]);
+      const q = (s) => "\x27" + String(s).replace(/\x27/g, "\x27\\\x27\x27") + "\x27";
+      console.log("export PGHOST="     + q(u.hostname));
+      console.log("export PGPORT="     + q(u.port || 5432));
+      console.log("export PGUSER="     + q(decodeURIComponent(u.username)));
+      console.log("export PGPASSWORD=" + q(decodeURIComponent(u.password)));
+      console.log("export PGDATABASE=" + q(u.pathname.replace(/^\//, "") || "postgres"));
+    ' "$SUPABASE_DB_URL")"
   fi
+
+  if [[ -z "${PGHOST:-}" || -z "${PGUSER:-}" || -z "${PGPASSWORD:-}" ]]; then
+    warn "no DB credentials found"
+    echo "   Add to $DEPLOY_ENV_FILE (gitignored):"
+    echo "     PGHOST=aws-0-<region>.pooler.supabase.com"
+    echo "     PGPORT=6543"
+    echo "     PGUSER=postgres.<project-ref>"
+    echo "     PGDATABASE=postgres"
+    echo "     PGPASSWORD=your-raw-password"
+    echo "   (or legacy: SUPABASE_DB_URL=postgresql://user:pass@host:port/db)"
+    fail "cannot apply schema without credentials"
+  fi
+
+  : "${PGPORT:=6543}"
+  : "${PGDATABASE:=postgres}"
+  export PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE
 
   command -v psql >/dev/null || fail "psql not installed (brew install libpq && brew link --force libpq)"
 
-  echo "  applying $SCHEMA_FILE …"
-  psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f "$SCHEMA_FILE" >/dev/null
+  echo "  applying $SCHEMA_FILE to $PGUSER@$PGHOST:$PGPORT/$PGDATABASE …"
+  psql -v ON_ERROR_STOP=1 -f "$SCHEMA_FILE" >/dev/null
   echo "$CURRENT_HASH" > "$SCHEMA_STATE_FILE"
   ok "schema applied; recorded hash in $(basename "$SCHEMA_STATE_FILE")"
 elif [[ "$SCHEMA_DRIFTED" = true ]]; then

@@ -2,6 +2,14 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, Link as LinkIcon, Loader2, LogOut, Share2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 import { useAuth } from '@/context/AuthContext';
 import { buildInviteUrl, createCouple, fetchMyCouple, leaveCouple } from '@/lib/couples';
 import type { MyCouple } from '@/lib/types';
@@ -14,6 +22,7 @@ export function CoupleCard() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [canShare, setCanShare] = useState(false);
+  const [confirmLeaveOpen, setConfirmLeaveOpen] = useState(false);
 
   useEffect(() => {
     setCanShare(typeof navigator !== 'undefined' && typeof navigator.share === 'function');
@@ -72,6 +81,7 @@ export function CoupleCard() {
       await leaveCouple();
       setCouple(null);
       setState('unlinked');
+      setConfirmLeaveOpen(false);
     } catch (e: any) {
       console.error(e);
       setErr(e?.message ?? 'Could not leave couple');
@@ -191,11 +201,36 @@ export function CoupleCard() {
           <p className="font-semibold">{partner?.displayName || '—'}</p>
         </div>
       </div>
-      <Button variant="ghost" onClick={handleLeave} disabled={busy} className="w-fit">
+      <Button
+        variant="ghost"
+        onClick={() => setConfirmLeaveOpen(true)}
+        disabled={busy}
+        className="w-fit"
+      >
         <LogOut />
         <span>Leave couple</span>
       </Button>
       {err && <p className="text-xs text-red-600">{err}</p>}
+
+      <Dialog open={confirmLeaveOpen} onOpenChange={(o) => !busy && setConfirmLeaveOpen(o)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Leave couple with {partner?.displayName || 'your partner'}?</DialogTitle>
+            <DialogDescription>
+              You&apos;ll both need to re-link via a fresh invite to play as a couple again. Your
+              individual stats and history stay put.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmLeaveOpen(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleLeave} disabled={busy}>
+              {busy ? 'Leaving…' : 'Leave couple'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
