@@ -3,6 +3,7 @@ import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Toaster } from '@/components/ui/toaster';
 import { Share2 } from 'lucide-react';
 import { Board } from '@/components/Board';
 import { CompletedBoard } from '@/components/CompletedBoard';
@@ -10,6 +11,7 @@ import { Layout } from '@/components/Layout';
 import { InstallPrompt } from '@/components/InstallPrompt';
 import { InviteBanner } from '@/components/InviteBanner';
 import { Leaderboard } from '@/components/Leaderboard';
+import { PwaUpdatePrompt } from '@/components/PwaUpdatePrompt';
 import { ShareResultDialog } from '@/components/ShareResultDialog';
 import { NarrativeOrchestrator } from '@/components/pranks/NarrativeOrchestrator';
 import { setPendingInvite } from '@/lib/couples';
@@ -17,6 +19,7 @@ import { supabase } from '@/lib/supabase';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { PrankProvider } from '@/context/PrankContext';
 import { useA2HS } from '@/hooks/useA2HS';
+import { useCelebration } from '@/hooks/useCelebration';
 import { fetchPuzzle } from '@/lib/puzzles';
 import { fetchLeaderboard, fetchMyAttempt, saveAttempt } from '@/lib/stats';
 import type { LeaderboardEntry, MyAttempt, Puzzle } from '@/lib/types';
@@ -47,41 +50,43 @@ export default function App() {
   return (
     <AuthProvider>
       <PrankProvider>
-      <Routes>
-        <Route path="/auth/callback" element={<AuthCallback />} />
-        <Route
-          path="/"
-          element={
-            <AuthGate>
-              <Home />
-            </AuthGate>
-          }
-        />
-        <Route
-          path="/play/:lane"
-          element={
-            <AuthGate>
-              <Play />
-            </AuthGate>
-          }
-        />
-        <Route
-          path="/profile"
-          element={
-            <AuthGate>
-              <Profile />
-            </AuthGate>
-          }
-        />
-        <Route
-          path="/prank"
-          element={
-            <AuthGate>
-              <PrankDashboard />
-            </AuthGate>
-          }
-        />
-      </Routes>
+        <Routes>
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route
+            path="/"
+            element={
+              <AuthGate>
+                <Home />
+              </AuthGate>
+            }
+          />
+          <Route
+            path="/play/:lane"
+            element={
+              <AuthGate>
+                <Play />
+              </AuthGate>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <AuthGate>
+                <Profile />
+              </AuthGate>
+            }
+          />
+          <Route
+            path="/prank"
+            element={
+              <AuthGate>
+                <PrankDashboard />
+              </AuthGate>
+            }
+          />
+        </Routes>
+        <Toaster />
+        <PwaUpdatePrompt />
       </PrankProvider>
     </AuthProvider>
   );
@@ -171,9 +176,12 @@ function Home() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { shouldShow, dismiss } = useA2HS();
+  const [puzzleId, setPuzzleId] = useState<string | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
   const [finishedToday, setFinishedToday] = useState(false);
+
+  useCelebration(puzzleId);
 
   useEffect(() => {
     if (!user) return;
@@ -187,6 +195,7 @@ function Home() {
           fetchMyAttempt(user.id, puzzle.id)
         ]);
         if (cancelled) return;
+        setPuzzleId(puzzle.id);
         setLeaderboard(board);
         setFinishedToday(Boolean(myAttempt?.finished));
       } catch (e) {
@@ -347,7 +356,13 @@ function Play() {
             </div>
           </Card>
         )}
-        {summary?.win && <NarrativeOrchestrator key="narrative-pranks" guessesUsed={summary.guesses} />}
+        {summary?.win && puzzle && (
+          <NarrativeOrchestrator
+            key={`narrative-pranks:${puzzle.id}`}
+            guessesUsed={summary.guesses}
+            puzzleId={puzzle.id}
+          />
+        )}
         {summary && puzzle && (
           <ShareResultDialog
             open={shareOpen}

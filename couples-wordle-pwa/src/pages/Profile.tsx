@@ -4,20 +4,24 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Trophy } from 'lucide-react';
 import { Layout } from '@/components/Layout';
 import { StreakCard } from '@/components/StreakCard';
 import { CoupleCard } from '@/components/CoupleCard';
+import { TrophyShelf } from '@/components/TrophyShelf';
 import { useAuth } from '@/context/AuthContext';
 import { fetchGameHistory, fetchUserStats } from '@/lib/stats';
+import { fetchMyTrophyStats } from '@/lib/trophies';
 import { getProfile, upsertDisplayName } from '@/lib/profiles';
 import { usePranks } from '@/context/PrankContext';
-import type { GameHistoryEntry, UserStats } from '@/lib/types';
+import type { GameHistoryEntry, TrophyStats, UserStats } from '@/lib/types';
 
 export function Profile() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const { isAdmin } = usePranks();
   const [stats, setStats] = useState<UserStats | null>(null);
+  const [trophyStats, setTrophyStats] = useState<TrophyStats | null>(null);
   const [history, setHistory] = useState<GameHistoryEntry[]>([]);
   const [displayName, setDisplayName] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -33,13 +37,15 @@ export function Profile() {
         const profile = await getProfile(user.id);
         if (!cancelled) setDisplayName(profile?.displayName ?? '');
 
-        const [userStats, userHistory] = await Promise.all([
+        const [userStats, userHistory, userTrophyStats] = await Promise.all([
           fetchUserStats(user.id),
-          fetchGameHistory(user.id, 30)
+          fetchGameHistory(user.id, 30),
+          fetchMyTrophyStats(user.id)
         ]);
         if (cancelled) return;
         setStats(userStats);
         setHistory(userHistory);
+        setTrophyStats(userTrophyStats);
       } catch (e: any) {
         console.error(e);
         if (!cancelled) setError(e?.message ?? 'Failed to load profile');
@@ -116,7 +122,10 @@ export function Profile() {
           currentStreak={stats?.currentStreak ?? null}
           maxStreak={stats?.maxStreak ?? null}
           totalWins={stats?.totalWins ?? null}
+          trophyCount={trophyStats?.total ?? null}
         />
+
+        {user && <TrophyShelf userId={user.id} />}
 
         <CoupleCard />
 
@@ -141,7 +150,8 @@ export function Profile() {
                         {h.hintsUsed ? ` · ${h.hintsUsed} hint${h.hintsUsed === 1 ? '' : 's'}` : ''}
                       </p>
                     </div>
-                    <span className={h.win ? 'text-success font-semibold' : 'text-textSecondary'}>
+                    <span className={h.win ? 'flex items-center gap-1 text-success font-semibold' : 'text-textSecondary'}>
+                      {h.win && <Trophy className="h-3.5 w-3.5" />}
                       {h.win ? 'Win' : 'Loss'}
                     </span>
                   </li>

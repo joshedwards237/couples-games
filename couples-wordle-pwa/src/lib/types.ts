@@ -85,3 +85,22 @@ export interface CouplePreview {
   memberCount: number;
   isFull: boolean;
 }
+
+export type TrophyTier = 'bronze' | 'silver' | 'gold' | 'platinum';
+export type TrophyKind = 'win' | 'sub_3' | 'perfect' | 'streak_7' | 'streak_14' | 'streak_30';
+
+export interface Trophy {
+  id: string;
+  userId: string;
+  kind: TrophyKind;
+  tier: TrophyTier;
+  puzzleId: string | null;
+  streakLength: number | null;
+  earnedAt: string;
+}
+
+export interface TrophyStats {
+  total: number;
+  byTier: Record<TrophyTier, number>;
+  byKind: Partial<Record<TrophyKind, number>>;
+}

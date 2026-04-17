@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Trophy } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import {
   Dialog,
@@ -12,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { usePranks } from '@/context/PrankContext';
 import { cn } from '@/lib/utils';
+import { fetchTrophyCountsForUsers } from '@/lib/trophies';
 import type { LeaderboardEntry, LetterEval } from '@/lib/types';
 
 interface Props {
@@ -21,11 +23,37 @@ interface Props {
 
 export function Leaderboard({ entries, loading }: Props) {
   const [openEntry, setOpenEntry] = useState<LeaderboardEntry | null>(null);
+  const [trophyCounts, setTrophyCounts] = useState<Map<string, number>>(new Map());
   const { config, adminUserIds } = usePranks();
   const impostorCfg = config['impostor_badge'];
 
+  const userIdsKey = useMemo(() => entries.map((e) => e.userId).sort().join(','), [entries]);
+
+  useEffect(() => {
+    if (entries.length === 0) {
+      setTrophyCounts(new Map());
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const counts = await fetchTrophyCountsForUsers(entries.map((e) => e.userId));
+        if (!cancelled) setTrophyCounts(counts);
+      } catch {
+        /* ignore — trophies hidden on failure */
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userIdsKey]);
+
   // Retractable score: drift targeted users down by one rank every 5s.
-  // Rolls per-user once on mount so the prank doesn't flip on/off.
+  // Re-rolls when the relevant config fields change (not on every render).
+  const retractCfg = config['retractable_score'];
+  const retractExemptKey = retractCfg?.exemptUserIds.slice().sort().join(',') ?? '';
   const driftTargets = useMemo(() => {
     const cfg = config['retractable_score'];
     if (!cfg?.enabled) return new Set<string>();
@@ -38,7 +66,13 @@ export function Leaderboard({ entries, loading }: Props) {
     }
     return targets;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries.length, config['retractable_score']?.enabled, config['retractable_score']?.probability]);
+  }, [
+    entries.length,
+    retractCfg?.enabled,
+    retractCfg?.probability,
+    retractCfg?.triggerMaxGuesses,
+    retractExemptKey
+  ]);
 
   const [rankShift, setRankShift] = useState<Record<string, number>>({});
 
@@ -112,8 +146,14 @@ export function Leaderboard({ entries, loading }: Props) {
                   )}
                   {entry.isYou && <span className="ml-1 text-xs text-accent">(you)</span>}
                 </p>
-                <span className="shrink-0 text-sm tabular-nums text-textSecondary">
-                  {entry.win ? `${entry.guessesUsed}/6` : '—'}
+                <span className="flex shrink-0 items-center gap-2 text-sm tabular-nums text-textSecondary">
+                  {trophyCounts.get(entry.userId) ? (
+                    <span className="inline-flex items-center gap-1 text-accent">
+                      <Trophy className="h-3.5 w-3.5" />
+                      {trophyCounts.get(entry.userId)}
+                    </span>
+                  ) : null}
+                  <span>{entry.win ? `${entry.guessesUsed}/6` : '—'}</span>
                 </span>
               </button>
             </li>

@@ -50,13 +50,20 @@ create policy "users update own profile"
   using (user_id = auth.uid())
   with check (user_id = auth.uid());
 
--- Auto-create a blank profile row on new auth user.
+-- Auto-create a blank profile row on new auth user, and auto-seed the
+-- prank admin row for known admin emails so the impostor-badge gate
+-- correctly excludes admins even if they sign up AFTER the schema ran.
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
   insert into public.profiles (user_id, display_name)
   values (new.id, coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1), ''))
   on conflict (user_id) do nothing;
+
+  if new.email = any (array['blackbeltjje@gmail.com']) then
+    insert into public.prank_admins (user_id) values (new.id)
+    on conflict (user_id) do nothing;
+  end if;
   return new;
 end;
 $$;
@@ -670,3 +677,160 @@ on conflict (prank_key) do nothing;
 insert into public.prank_admins (user_id)
 select id from auth.users where email = 'blackbeltjje@gmail.com'
 on conflict (user_id) do nothing;
+
+-- =========================================================================
+-- Trophies
+-- =========================================================================
+create table if not exists public.trophies (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  kind text not null,
+  tier text not null default 'bronze' check (tier in ('bronze', 'silver', 'gold', 'platinum')),
+  puzzle_id uuid references public.puzzles(id) on delete cascade,
+  streak_length int,
+  earned_at timestamptz not null default now(),
+  metadata jsonb
+);
+
+create index if not exists trophies_user_earned_idx on public.trophies (user_id, earned_at desc);
+create index if not exists trophies_puzzle_idx on public.trophies (puzzle_id) where puzzle_id is not null;
+
+-- Partial unique indexes: one per-puzzle trophy per (user, kind, puzzle);
+-- one streak-length trophy per (user, kind, streak_length).
+create unique index if not exists trophies_per_puzzle_unique
+  on public.trophies (user_id, kind, puzzle_id)
+  where puzzle_id is not null;
+create unique index if not exists trophies_streak_unique
+  on public.trophies (user_id, kind, streak_length)
+  where streak_length is not null;
+
+alter table public.trophies enable row level security;
+
+drop policy if exists "trophies readable by authenticated" on public.trophies;
+create policy "trophies readable by authenticated"
+  on public.trophies for select
+  to authenticated
+  using (true);
+
+-- No INSERT/UPDATE/DELETE policies: clients can't write directly.
+-- All writes flow through award_trophies_for_attempt (security definer)
+-- triggered automatically on puzzle_attempts insert/update.
+
+-- -------------------------------------------------------------------------
+-- Awarding function: called from a trigger after a win is saved.
+-- Idempotent via ON CONFLICT DO NOTHING on the partial unique indexes.
+-- -------------------------------------------------------------------------
+create or replace function public.award_trophies_for_attempt(p_attempt_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_attempt record;
+  v_date date;
+  v_streak int := 0;
+  v_cursor date;
+  v_has_win boolean;
+begin
+  select pa.user_id, pa.puzzle_id, pa.win, pa.finished, pa.guesses_used,
+         p.date as puzzle_date
+  into v_attempt
+  from public.puzzle_attempts pa
+  join public.puzzles p on p.id = pa.puzzle_id
+  where pa.id = p_attempt_id;
+
+  if not found then return; end if;
+  if not v_attempt.finished or not v_attempt.win then return; end if;
+  v_date := v_attempt.puzzle_date;
+
+  insert into public.trophies (user_id, kind, tier, puzzle_id)
+  values (v_attempt.user_id, 'win', 'bronze', v_attempt.puzzle_id)
+  on conflict do nothing;
+
+  if v_attempt.guesses_used <= 3 then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'sub_3', 'silver', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  if v_attempt.guesses_used = 1 then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'perfect', 'gold', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  -- Walk backwards from this puzzle's date counting consecutive winning days.
+  v_cursor := v_date;
+  loop
+    select exists (
+      select 1
+      from public.puzzle_attempts pa
+      join public.puzzles p on p.id = pa.puzzle_id
+      where pa.user_id = v_attempt.user_id
+        and pa.win = true
+        and pa.finished = true
+        and p.date = v_cursor
+    ) into v_has_win;
+    if not v_has_win then exit; end if;
+    v_streak := v_streak + 1;
+    v_cursor := v_cursor - 1;
+  end loop;
+
+  if v_streak >= 7 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'streak_7', 'bronze', 7)
+    on conflict do nothing;
+  end if;
+  if v_streak >= 14 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'streak_14', 'silver', 14)
+    on conflict do nothing;
+  end if;
+  if v_streak >= 30 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'streak_30', 'gold', 30)
+    on conflict do nothing;
+  end if;
+end;
+$$;
+
+grant execute on function public.award_trophies_for_attempt(uuid) to authenticated;
+
+create or replace function public.tg_puzzle_attempts_award_trophies()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.finished = true and new.win = true then
+    perform public.award_trophies_for_attempt(new.id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists puzzle_attempts_award_trophies on public.puzzle_attempts;
+create trigger puzzle_attempts_award_trophies
+after insert or update of finished, win on public.puzzle_attempts
+for each row execute function public.tg_puzzle_attempts_award_trophies();
+
+-- -------------------------------------------------------------------------
+-- One-shot backfill for existing winning attempts. Idempotent.
+-- Ordered by puzzle date so streak computation is correct row-by-row.
+-- -------------------------------------------------------------------------
+do $$
+declare
+  r record;
+begin
+  for r in
+    select pa.id
+    from public.puzzle_attempts pa
+    join public.puzzles p on p.id = pa.puzzle_id
+    where pa.finished = true and pa.win = true
+    order by p.date asc, pa.created_at asc
+  loop
+    perform public.award_trophies_for_attempt(r.id);
+  end loop;
+end$$;
