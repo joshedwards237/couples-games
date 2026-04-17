@@ -51,14 +51,20 @@ export async function fetchMyCouple(userId: string): Promise<MyCouple | null> {
 
   const userIds = ((memberRows ?? []) as Array<{ user_id: string }>).map((r) => r.user_id);
   const nameMap = new Map<string, string>();
+  const avatarMap = new Map<string, string | null>();
   if (userIds.length > 0) {
     const { data: profiles, error: pErr } = await supabase
       .from('profiles')
-      .select('user_id, display_name')
+      .select('user_id, display_name, avatar_url')
       .in('user_id', userIds);
     if (pErr) throw pErr;
-    for (const p of (profiles ?? []) as Array<{ user_id: string; display_name: string }>) {
+    for (const p of (profiles ?? []) as Array<{
+      user_id: string;
+      display_name: string;
+      avatar_url: string | null;
+    }>) {
       nameMap.set(p.user_id, p.display_name ?? '');
+      avatarMap.set(p.user_id, p.avatar_url ?? null);
     }
   }
 
@@ -70,7 +76,8 @@ export async function fetchMyCouple(userId: string): Promise<MyCouple | null> {
         userId: r.user_id,
         role: r.role,
         joinedAt: r.joined_at,
-        displayName: nameMap.get(r.user_id) || null
+        displayName: nameMap.get(r.user_id) || null,
+        avatarUrl: avatarMap.get(r.user_id) ?? null
       })
     )
   };

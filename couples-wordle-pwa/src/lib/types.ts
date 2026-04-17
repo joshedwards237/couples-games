@@ -74,6 +74,7 @@ export interface CoupleMember {
   role: 'creator' | 'member';
   joinedAt: string;
   displayName: string | null;
+  avatarUrl: string | null;
 }
 
 export interface MyCouple {

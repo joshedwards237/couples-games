@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check, Copy, Link as LinkIcon, Loader2, LogOut, Share2 } from 'lucide-react';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -195,16 +196,10 @@ export function CoupleCard() {
           You&apos;re playing as a couple. Both of your results appear on today&apos;s leaderboard.
         </CardDescription>
       </CardHeader>
-      <div className="flex items-center gap-3 text-sm">
-        <div>
-          <p className="text-xs text-textSecondary">You</p>
-          <p className="font-semibold">{meName}</p>
-        </div>
+      <div className="flex items-center gap-4 text-sm">
+        <MemberTile label="You" name={meName} avatarUrl={selfAvatar(user) ?? me?.avatarUrl ?? null} />
         <span className="text-textSecondary">·</span>
-        <div>
-          <p className="text-xs text-textSecondary">Partner</p>
-          <p className="font-semibold">{partnerName}</p>
-        </div>
+        <MemberTile label="Partner" name={partnerName} avatarUrl={partner?.avatarUrl ?? null} />
       </div>
       <Button
         variant="ghost"
@@ -263,4 +258,50 @@ function selfFallbackName(user: { user_metadata?: unknown; email?: string | null
   if (fromGoogle) return fromGoogle as string;
   if (user.email && user.email.includes('@')) return user.email.split('@')[0];
   return null;
+}
+
+/**
+ * Current user's OAuth avatar as a fast-path while the profiles row
+ * might still be backfilling. Falls back to the stored profile avatar.
+ */
+function selfAvatar(user: { user_metadata?: unknown } | null): string | null {
+  if (!user) return null;
+  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+  const raw =
+    (typeof meta.avatar_url === 'string' && meta.avatar_url.trim()) ||
+    (typeof meta.picture === 'string' && meta.picture.trim()) ||
+    '';
+  return raw || null;
+}
+
+function initialsFor(name: string): string {
+  const parts = (name || '').split(/\s+/).filter(Boolean);
+  const initials = parts
+    .map((p) => (Array.from(p)[0] ?? '').toUpperCase())
+    .slice(0, 2)
+    .join('');
+  return initials || '?';
+}
+
+function MemberTile({
+  label,
+  name,
+  avatarUrl
+}: {
+  label: string;
+  name: string;
+  avatarUrl: string | null;
+}) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2">
+      <Avatar className="h-9 w-9 shrink-0">
+        {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
+        <AvatarFallback className="text-xs">{initialsFor(name)}</AvatarFallback>
+      </Avatar>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-textSecondary">{label}</p>
+        <p className="truncate font-semibold">{name}</p>
+      </div>
+    </div>
+  );
 }

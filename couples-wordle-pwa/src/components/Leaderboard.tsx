@@ -214,7 +214,7 @@ export function Leaderboard({ entries, loading }: Props) {
 function initialsFor(name: string): string {
   const parts = (name || '').split(/\s+/).filter(Boolean);
   const initials = parts
-    .map((p) => p[0]?.toUpperCase() ?? '')
+    .map((p) => (Array.from(p)[0] ?? '').toUpperCase())
     .slice(0, 2)
     .join('');
   return initials || '?';
