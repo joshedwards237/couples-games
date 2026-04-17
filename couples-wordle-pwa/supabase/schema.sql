@@ -155,6 +155,71 @@ begin
   end if;
 end$$;
 
+-- -------------------------------------------------------------------------
+-- Reconcile foreign keys on puzzle_attempts. Older versions of this table
+-- referenced a legacy public.users and may have multiple FKs to puzzles,
+-- which (a) blocks inserts for new auth.users and (b) confuses PostgREST
+-- when embedding puzzles via `puzzles!inner(...)`.
+-- Drop every existing FK on user_id and on (puzzle_id → puzzles), then add
+-- canonical ones pointing at auth.users(id) and public.puzzles(id).
+-- -------------------------------------------------------------------------
+do $$
+declare
+  cname text;
+begin
+  -- Drop every FK on user_id that does NOT target auth.users.
+  -- (A legacy FK pointing at public.users often has the default name
+  -- 'puzzle_attempts_user_id_fkey', so name-based guards would skip it;
+  -- we match on the reference target instead.)
+  for cname in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.puzzle_attempts'::regclass
+      and contype = 'f'
+      and pg_get_constraintdef(oid) ilike '%(user_id)%'
+      and confrelid <> 'auth.users'::regclass
+  loop
+    execute format('alter table public.puzzle_attempts drop constraint %I', cname);
+  end loop;
+
+  -- Drop every FK from puzzle_attempts → puzzles except our canonical one,
+  -- so PostgREST sees exactly one relationship.
+  for cname in
+    select conname
+    from pg_constraint
+    where conrelid = 'public.puzzle_attempts'::regclass
+      and contype = 'f'
+      and confrelid = 'public.puzzles'::regclass
+      and conname <> 'puzzle_attempts_puzzle_id_fkey'
+  loop
+    execute format('alter table public.puzzle_attempts drop constraint %I', cname);
+  end loop;
+
+  -- Ensure canonical user_id FK → auth.users exists.
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'puzzle_attempts_user_id_fkey'
+      and conrelid = 'public.puzzle_attempts'::regclass
+      and confrelid = 'auth.users'::regclass
+  ) then
+    alter table public.puzzle_attempts
+      add constraint puzzle_attempts_user_id_fkey
+      foreign key (user_id) references auth.users(id) on delete cascade;
+  end if;
+
+  -- Ensure canonical puzzle_id FK → public.puzzles exists.
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'puzzle_attempts_puzzle_id_fkey'
+      and conrelid = 'public.puzzle_attempts'::regclass
+      and confrelid = 'public.puzzles'::regclass
+  ) then
+    alter table public.puzzle_attempts
+      add constraint puzzle_attempts_puzzle_id_fkey
+      foreign key (puzzle_id) references public.puzzles(id) on delete cascade;
+  end if;
+end$$;
+
 create index if not exists puzzle_attempts_puzzle_idx on public.puzzle_attempts (puzzle_id);
 create index if not exists puzzle_attempts_user_idx on public.puzzle_attempts (user_id, created_at desc);
 

@@ -164,22 +164,28 @@ function formatTime(ms: number): string {
 
 function IdentityCard() {
   const { user } = useAuth();
+  const [avatarFailed, setAvatarFailed] = useState(false);
   if (!user) return null;
 
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
-  const avatarUrl =
-    (meta.avatar_url as string | undefined) ||
-    (meta.picture as string | undefined) ||
-    null;
-  const fullName =
-    (meta.full_name as string | undefined) ||
-    (meta.name as string | undefined) ||
-    (user.email ? user.email.split('@')[0] : 'Player');
-  const initials = fullName
-    .split(/\s+/)
-    .map((p) => p[0]?.toUpperCase() ?? '')
-    .slice(0, 2)
-    .join('') || '?';
+  const rawAvatar =
+    (typeof meta.avatar_url === 'string' ? meta.avatar_url : '') ||
+    (typeof meta.picture === 'string' ? meta.picture : '') ||
+    '';
+  const avatarUrl = rawAvatar && !avatarFailed ? rawAvatar : null;
+  const rawName =
+    (typeof meta.full_name === 'string' ? meta.full_name : '') ||
+    (typeof meta.name === 'string' ? meta.name : '') ||
+    (user.email ? user.email.split('@')[0] : '') ||
+    'Player';
+  const fullName = rawName.trim() || 'Player';
+  const initials =
+    fullName
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((p) => p[0]?.toUpperCase() ?? '')
+      .slice(0, 2)
+      .join('') || '?';
 
   return (
     <Card className="flex items-center gap-4 bg-white/80 backdrop-blur">
@@ -189,9 +195,7 @@ function IdentityCard() {
           alt=""
           referrerPolicy="no-referrer"
           className="h-14 w-14 rounded-full object-cover shadow-[0_4px_12px_rgba(0,0,0,0.12)]"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.display = 'none';
-          }}
+          onError={() => setAvatarFailed(true)}
         />
       ) : (
         <div className="h-14 w-14 rounded-full bg-accent/20 text-accent grid place-items-center font-bold">
