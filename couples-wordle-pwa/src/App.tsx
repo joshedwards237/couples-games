@@ -10,6 +10,7 @@ import { Layout } from '@/components/Layout';
 import { InstallPrompt } from '@/components/InstallPrompt';
 import { InviteBanner } from '@/components/InviteBanner';
 import { Leaderboard } from '@/components/Leaderboard';
+import { MonthlyLeaderboard } from '@/components/MonthlyLeaderboard';
 import { PwaUpdatePrompt } from '@/components/PwaUpdatePrompt';
 import { ShareResultDialog } from '@/components/ShareResultDialog';
 import { NarrativeOrchestrator } from '@/components/pranks/NarrativeOrchestrator';
@@ -20,8 +21,8 @@ import { PrankProvider } from '@/context/PrankContext';
 import { useA2HS } from '@/hooks/useA2HS';
 import { useCelebration } from '@/hooks/useCelebration';
 import { fetchPuzzle } from '@/lib/puzzles';
-import { fetchLeaderboard, fetchMyAttempt, saveAttempt } from '@/lib/stats';
-import type { LeaderboardEntry, MyAttempt, Puzzle } from '@/lib/types';
+import { fetchLeaderboard, fetchMonthlyWinsLeaderboard, fetchMyAttempt, saveAttempt } from '@/lib/stats';
+import type { LeaderboardEntry, MonthlyLeaderboardEntry, MyAttempt, Puzzle } from '@/lib/types';
 import './styles/globals.css';
 import { Profile } from '@/pages/Profile';
 import { PrankDashboard } from '@/pages/PrankDashboard';
@@ -153,6 +154,8 @@ function Home() {
   const [puzzleId, setPuzzleId] = useState<string | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
+  const [monthly, setMonthly] = useState<MonthlyLeaderboardEntry[]>([]);
+  const [monthlyLoading, setMonthlyLoading] = useState(true);
   const [finishedToday, setFinishedToday] = useState(false);
 
   useCelebration(puzzleId);
@@ -164,18 +167,26 @@ function Home() {
     const load = async () => {
       try {
         const puzzle = await fetchPuzzle('classic');
-        const [board, myAttempt] = await Promise.all([
+        const [board, myAttempt, monthlyRows] = await Promise.all([
           fetchLeaderboard(puzzle.id, puzzle.word, user.id),
-          fetchMyAttempt(user.id, puzzle.id)
+          fetchMyAttempt(user.id, puzzle.id),
+          fetchMonthlyWinsLeaderboard(user.id).catch((e) => {
+            console.error('monthly leaderboard failed', e);
+            return [] as MonthlyLeaderboardEntry[];
+          })
         ]);
         if (cancelled) return;
         setPuzzleId(puzzle.id);
         setLeaderboard(board);
+        setMonthly(monthlyRows);
         setFinishedToday(Boolean(myAttempt?.finished));
       } catch (e) {
         console.error('home load failed', e);
       } finally {
-        if (!cancelled) setLeaderboardLoading(false);
+        if (!cancelled) {
+          setLeaderboardLoading(false);
+          setMonthlyLoading(false);
+        }
       }
     };
 
@@ -197,6 +208,8 @@ function Home() {
         </div>
 
         <Leaderboard entries={leaderboard} loading={leaderboardLoading} puzzleId={puzzleId} />
+
+        <MonthlyLeaderboard entries={monthly} loading={monthlyLoading} />
 
         {shouldShow && <InstallPrompt onDismiss={dismiss} />}
       </section>

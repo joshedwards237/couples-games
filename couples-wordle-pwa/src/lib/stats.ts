@@ -5,6 +5,7 @@ import type {
   GameMode,
   LeaderboardEntry,
   LetterEval,
+  MonthlyLeaderboardEntry,
   MyAttempt,
   UserStats
 } from './types';
@@ -150,12 +151,42 @@ export async function fetchGameHistory(userId: string, limit = 30): Promise<Game
   });
 }
 
+/**
+ * Returns the user_ids that should appear on the leaderboard for the given
+ * viewer — namely everyone in their couple (themselves + partner). If the
+ * user isn't linked, returns just their own id (so solo players still see
+ * their own attempt). Fails open on errors so the UI doesn't blank.
+ */
+async function coupleMemberIds(userId: string): Promise<string[]> {
+  try {
+    const { data: mine, error } = await supabase
+      .from('couple_members')
+      .select('couple_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error || !mine) return [userId];
+    const { data: all, error: e2 } = await supabase
+      .from('couple_members')
+      .select('user_id')
+      .eq('couple_id', (mine as { couple_id: string }).couple_id);
+    if (e2 || !all) return [userId];
+    const ids = new Set<string>([userId]);
+    for (const r of all as Array<{ user_id: string }>) ids.add(r.user_id);
+    return Array.from(ids);
+  } catch {
+    return [userId];
+  }
+}
+
 export async function fetchLeaderboard(puzzleId: string, puzzleWord: string, currentUserId: string | null): Promise<LeaderboardEntry[]> {
+  if (!currentUserId) return [];
+  const memberIds = await coupleMemberIds(currentUserId);
   const { data: attempts, error } = await supabase
     .from('puzzle_attempts')
     .select('user_id, rows, guesses_used, time_ms, win, finished')
     .eq('puzzle_id', puzzleId)
-    .eq('finished', true);
+    .eq('finished', true)
+    .in('user_id', memberIds);
   if (error) throw error;
   const list = (attempts ?? []) as Array<{
     user_id: string;
@@ -197,6 +228,85 @@ export async function fetchLeaderboard(puzzleId: string, puzzleWord: string, cur
       if (a.guessesUsed !== b.guessesUsed) return a.guessesUsed - b.guessesUsed;
       return a.timeMs - b.timeMs;
     });
+}
+
+/**
+ * Returns `YYYY-MM-01` for the current calendar month in America/Denver
+ * (handles MST/MDT automatically via Intl).
+ */
+function firstOfMonthDenver(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Denver',
+    year: 'numeric',
+    month: '2-digit'
+  }).formatToParts(new Date());
+  const y = parts.find((p) => p.type === 'year')?.value ?? '1970';
+  const m = parts.find((p) => p.type === 'month')?.value ?? '01';
+  return `${y}-${m}-01`;
+}
+
+/**
+ * Monthly leaderboard: total classic wins per user since the first of the
+ * current calendar month in Denver time. Ties use the same rank number
+ * (computed in the UI). Classic-lane only.
+ */
+export async function fetchMonthlyWinsLeaderboard(
+  currentUserId: string | null
+): Promise<MonthlyLeaderboardEntry[]> {
+  if (!currentUserId) return [];
+  const monthStart = firstOfMonthDenver();
+  const memberIds = await coupleMemberIds(currentUserId);
+
+  const { data, error } = await supabase
+    .from('puzzle_attempts')
+    .select('user_id, puzzles!inner(date, lane)')
+    .eq('finished', true)
+    .eq('win', true)
+    .eq('puzzles.lane', 'classic')
+    .gte('puzzles.date', monthStart)
+    .in('user_id', memberIds);
+  if (error) throw error;
+
+  const rows = (data ?? []) as Array<{ user_id: string }>;
+  if (rows.length === 0) return [];
+
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.user_id, (counts.get(r.user_id) ?? 0) + 1);
+
+  const userIds = Array.from(counts.keys());
+  const { data: profiles, error: pErr } = await supabase
+    .from('profiles')
+    .select('user_id, display_name, avatar_url')
+    .in('user_id', userIds);
+  if (pErr) throw pErr;
+
+  const profileById = new Map<
+    string,
+    { displayName: string; avatarUrl: string | null }
+  >();
+  for (const p of (profiles ?? []) as Array<{
+    user_id: string;
+    display_name: string | null;
+    avatar_url: string | null;
+  }>) {
+    profileById.set(p.user_id, {
+      displayName: p.display_name ?? '',
+      avatarUrl: p.avatar_url ?? null
+    });
+  }
+
+  return Array.from(counts.entries())
+    .map(([userId, wins]) => {
+      const pf = profileById.get(userId);
+      return {
+        userId,
+        displayName: pf?.displayName || 'Player',
+        avatarUrl: pf?.avatarUrl ?? null,
+        wins,
+        isYou: userId === currentUserId
+      } satisfies MonthlyLeaderboardEntry;
+    })
+    .sort((a, b) => b.wins - a.wins);
 }
 
 function shiftDate(date: string, days: number): string {

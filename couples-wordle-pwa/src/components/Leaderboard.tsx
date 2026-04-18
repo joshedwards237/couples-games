@@ -15,7 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { usePranks } from '@/context/PrankContext';
 import { cn } from '@/lib/utils';
-import { fetchTrophyCountsForUsers, fetchWinnersForPuzzle } from '@/lib/trophies';
+import { fetchWinnersForPuzzle } from '@/lib/trophies';
 import type { LeaderboardEntry, LetterEval } from '@/lib/types';
 
 interface Props {
@@ -28,7 +28,6 @@ interface Props {
 export function Leaderboard({ entries, loading, puzzleId }: Props) {
   const navigate = useNavigate();
   const [openEntry, setOpenEntry] = useState<LeaderboardEntry | null>(null);
-  const [trophyCounts, setTrophyCounts] = useState<Map<string, number>>(new Map());
   const [todayWinners, setTodayWinners] = useState<Set<string>>(new Set());
   const { config, adminUserIds } = usePranks();
   const impostorCfg = config['impostor_badge'];
@@ -51,29 +50,6 @@ export function Leaderboard({ entries, loading, puzzleId }: Props) {
       cancelled = true;
     };
   }, [puzzleId]);
-
-  const userIdsKey = useMemo(() => entries.map((e) => e.userId).sort().join(','), [entries]);
-
-  useEffect(() => {
-    if (entries.length === 0) {
-      setTrophyCounts(new Map());
-      return;
-    }
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const counts = await fetchTrophyCountsForUsers(entries.map((e) => e.userId));
-        if (!cancelled) setTrophyCounts(counts);
-      } catch {
-        /* ignore — trophies hidden on failure */
-      }
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userIdsKey]);
 
   // Retractable score: drift targeted users down by one rank every 5s.
   // Re-rolls when the relevant config fields change (not on every render).
@@ -168,6 +144,12 @@ export function Leaderboard({ entries, loading, puzzleId }: Props) {
                   <span className={cn(isImpostor(entry) && 'text-textSecondary line-through decoration-textSecondary/60')}>
                     {entry.displayName}
                   </span>
+                  {isImpostor(entry) && (
+                    <span className="ml-1 rounded-sm bg-red-500/10 px-1 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-600">
+                      bot
+                    </span>
+                  )}
+                  {entry.isYou && <span className="ml-1 text-xs text-accent">(you)</span>}
                   {todayWinners.has(entry.userId) && (
                     <span
                       className="ml-1 inline-flex items-center rounded-full bg-accent/15 px-1.5 py-0.5 align-middle text-accent"
@@ -177,21 +159,9 @@ export function Leaderboard({ entries, loading, puzzleId }: Props) {
                       <Trophy className="h-3 w-3" />
                     </span>
                   )}
-                  {isImpostor(entry) && (
-                    <span className="ml-1 rounded-sm bg-red-500/10 px-1 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-600">
-                      bot
-                    </span>
-                  )}
-                  {entry.isYou && <span className="ml-1 text-xs text-accent">(you)</span>}
                 </p>
-                <span className="flex shrink-0 items-center gap-2 text-sm tabular-nums text-textSecondary">
-                  {trophyCounts.get(entry.userId) ? (
-                    <span className="inline-flex items-center gap-1 text-accent">
-                      <Trophy className="h-3.5 w-3.5" />
-                      {trophyCounts.get(entry.userId)}
-                    </span>
-                  ) : null}
-                  <span>{entry.win ? `${entry.guessesUsed}/6` : '—'}</span>
+                <span className="shrink-0 text-sm tabular-nums text-textSecondary">
+                  {entry.win ? `${entry.guessesUsed}/6` : '—'}
                 </span>
               </button>
             </li>

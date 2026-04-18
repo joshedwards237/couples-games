@@ -55,6 +55,14 @@ export interface LeaderboardEntry {
   isYou: boolean;
 }
 
+export interface MonthlyLeaderboardEntry {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  wins: number;
+  isYou: boolean;
+}
+
 export interface Profile {
   userId: string;
   displayName: string;
@@ -89,8 +97,78 @@ export interface CouplePreview {
   isFull: boolean;
 }
 
-export type TrophyTier = 'bronze' | 'silver' | 'gold' | 'platinum';
-export type TrophyKind = 'win' | 'sub_3' | 'perfect' | 'streak_7' | 'streak_14' | 'streak_30';
+export type TrophyTier = 'bronze' | 'silver' | 'gold' | 'platinum' | 'rib';
+export type TrophyCategory =
+  | 'headtohead'
+  | 'couple'
+  | 'speed'
+  | 'volume'
+  | 'skill'
+  | 'cadence'
+  | 'social'
+  | 'rib';
+
+export type TrophyKind =
+  // head-to-head / core
+  | 'win'
+  | 'sub_3'
+  | 'perfect'
+  // streaks (daily)
+  | 'streak_7'
+  | 'streak_14'
+  | 'streak_30'
+  // couple
+  | 'couple_sync'
+  | 'couple_tag_team'
+  | 'couple_mirror'
+  | 'couple_pace'
+  | 'couple_streak_7'
+  | 'couple_streak_14'
+  | 'couple_streak_30'
+  // speed
+  | 'sub_minute'
+  | 'blitz_30'
+  | 'lightning_10'
+  // volume / longevity
+  | 'regular_30'
+  | 'centenarian_100'
+  | 'year_one_365'
+  | 'wins_100'
+  | 'wins_1000'
+  | 'perfectionist'
+  // skill shape
+  | 'comeback'
+  | 'green_only'
+  | 'hard_letter'
+  | 'double_trouble'
+  // cadence / calendar
+  | 'weekly_7'
+  | 'weekender'
+  | 'morning_person_mst'
+  | 'night_owl_mst'
+  | 'monthly_sweep'
+  | 'new_year_w'
+  | 'valentine_sync'
+  // social
+  | 'matched'
+  | 'hype_man'
+  | 'kingmaker'
+  // anti-achievements
+  | 'houdini'
+  | 'heartbreak';
+
+export interface TrophyProgress {
+  finishes: number;
+  wins: number;
+  sub3Wins: number;
+  perfectWins: number;
+  bestTimeMs: number;
+  currentStreak: number;
+  morningFinishesDenver: number;
+  nightFinishesDenver: number;
+  coupleSyncs: number;
+  invitesAccepted: number;
+}
 
 export interface Trophy {
   id: string;

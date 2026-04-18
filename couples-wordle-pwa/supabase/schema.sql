@@ -1,6 +1,13 @@
 -- Couples Wordle — complete schema, RPC, RLS, and word pool seed.
 -- Safe to run multiple times (uses IF NOT EXISTS / DROP POLICY IF EXISTS).
 
+-- Supabase's hosted SQL editor runs with check_function_bodies=on, which
+-- over-eagerly parses plpgsql-embedded SQL at CREATE FUNCTION time and
+-- misresolves record-type variables (v_attempt, v_couple, etc.) as
+-- missing relations. Disable validation for this transaction; the
+-- functions are still checked at first execution.
+set local check_function_bodies = off;
+
 -- =========================================================================
 -- Extensions
 -- =========================================================================
@@ -271,48 +278,48 @@ create policy "users update own attempts"
 -- Word is selected deterministically from word_pool seeded on date+lane,
 -- so any concurrent client that inserts first wins; everyone sees the same row.
 -- =========================================================================
+-- Supabase's SQL-editor parser rejects plpgsql local variables as if they
+-- were missing tables ("relation v_X does not exist"). Rewriting as pure
+-- SQL eliminates all variables; logic lives in a single WITH + SELECT.
+-- The client (lib/puzzles.ts) already handles setof responses via
+-- Array.isArray and picks row[0].
+drop function if exists public.get_daily_puzzle(text);
+
 create or replace function public.get_daily_puzzle(p_lane text)
-returns public.puzzles
-language plpgsql
+returns setof public.puzzles
+language sql
 security definer
+volatile
 set search_path = public
 as $$
-declare
-  v_today date := (now() at time zone 'utc')::date;
-  v_existing public.puzzles;
-  v_word text;
-  v_seed text;
-begin
-  if p_lane not in ('classic', 'couple') then
-    raise exception 'invalid lane %', p_lane;
-  end if;
-
-  select * into v_existing from public.puzzles where date = v_today and lane = p_lane;
-  if found then
-    return v_existing;
-  end if;
-
-  v_seed := v_today::text || ':' || p_lane;
-  select word into v_word
-  from public.word_pool
-  order by md5(v_seed || word)
-  limit 1;
-
-  if v_word is null then
-    raise exception 'word_pool is empty';
-  end if;
-
+  -- Insert today's puzzle if missing. Deterministic word selection per
+  -- (date, lane) so concurrent callers race safely — ON CONFLICT protects
+  -- the unique (date, lane) index.
   insert into public.puzzles (date, lane, word)
-  values (v_today, p_lane, v_word)
-  on conflict (date, lane) do nothing
-  returning * into v_existing;
+  select
+    (now() at time zone 'utc')::date,
+    p_lane,
+    (
+      select word
+      from public.word_pool
+      order by md5(((now() at time zone 'utc')::date)::text || ':' || p_lane || word)
+      limit 1
+    )
+  where p_lane in ('classic', 'couple')
+    and not exists (
+      select 1
+      from public.puzzles
+      where date = (now() at time zone 'utc')::date
+        and lane = p_lane
+    )
+  on conflict (date, lane) do nothing;
 
-  if v_existing.id is null then
-    select * into v_existing from public.puzzles where date = v_today and lane = p_lane;
-  end if;
-
-  return v_existing;
-end;
+  -- Return the authoritative row (either the one we just inserted, or the
+  -- one a concurrent caller inserted, or a pre-existing one).
+  select *
+  from public.puzzles
+  where date = (now() at time zone 'utc')::date
+    and lane = p_lane;
 $$;
 
 grant execute on function public.get_daily_puzzle(text) to authenticated;
@@ -511,92 +518,105 @@ create policy "couple_members delete own"
   to authenticated
   using (user_id = auth.uid());
 
--- RPC: create a new couple, auto-enroll creator. Rejects if already in a couple.
+-- RPC: create a new couple, auto-enroll creator. Rejects (silently —
+-- returns zero rows) if the caller is not authenticated or is already in
+-- a couple. Written as `language sql` to sidestep the Supabase SQL-editor
+-- parser bug that rejects plpgsql local variable declarations.
+drop function if exists public.create_couple(text);
 create or replace function public.create_couple(p_name text default null)
-returns public.couples
-language plpgsql
+returns setof public.couples
+language sql
 security definer
+volatile
 set search_path = public
 as $$
-declare
-  v_user_id uuid := auth.uid();
-  v_couple public.couples;
-begin
-  if v_user_id is null then raise exception 'not authenticated'; end if;
-  if exists (select 1 from public.couple_members where user_id = v_user_id) then
-    raise exception 'already in a couple';
-  end if;
-  insert into public.couples (name, created_by)
-  values (nullif(trim(p_name), ''), v_user_id)
-  returning * into v_couple;
-  insert into public.couple_members (couple_id, user_id, role)
-  values (v_couple.id, v_user_id, 'creator');
-  return v_couple;
-end;
+  with new_couple as (
+    insert into public.couples (name, created_by)
+    select nullif(trim(p_name), ''), auth.uid()
+    where auth.uid() is not null
+      and not exists (
+        select 1 from public.couple_members where user_id = auth.uid()
+      )
+    returning *
+  ),
+  enrolled as (
+    insert into public.couple_members (couple_id, user_id, role)
+    select id, auth.uid(), 'creator' from new_couple
+    returning couple_id
+  )
+  select c.*
+  from public.couples c
+  where c.id in (select id from new_couple);
 $$;
 
 grant execute on function public.create_couple(text) to authenticated;
 
--- RPC: join an existing couple by id. Idempotent for own membership.
+-- RPC: join an existing couple by id. Idempotent for own membership. Pure
+-- SQL so the Supabase editor's plpgsql-variable-rejection bug doesn't bite.
+-- Returns the couple row on success or idempotent re-join; empty set if
+-- the couple doesn't exist, is full, or the caller is already in a
+-- different couple.
+drop function if exists public.join_couple(uuid);
 create or replace function public.join_couple(p_couple_id uuid)
-returns public.couples
-language plpgsql
+returns setof public.couples
+language sql
 security definer
+volatile
 set search_path = public
 as $$
-declare
-  v_user_id uuid := auth.uid();
-  v_couple public.couples;
-  v_member_count int;
-begin
-  if v_user_id is null then raise exception 'not authenticated'; end if;
-  select * into v_couple from public.couples where id = p_couple_id;
-  if v_couple.id is null then raise exception 'couple not found'; end if;
-
-  if exists (
-    select 1 from public.couple_members
-    where couple_id = v_couple.id and user_id = v_user_id
-  ) then
-    return v_couple;
-  end if;
-
-  if exists (select 1 from public.couple_members where user_id = v_user_id) then
-    raise exception 'already in a different couple';
-  end if;
-
-  select count(*)::int into v_member_count
-  from public.couple_members where couple_id = v_couple.id;
-  if v_member_count >= 2 then raise exception 'couple is full'; end if;
-
-  insert into public.couple_members (couple_id, user_id, role)
-  values (v_couple.id, v_user_id, 'member');
-  return v_couple;
-end;
+  with inserted as (
+    insert into public.couple_members (couple_id, user_id, role)
+    select c.id, auth.uid(), 'member'
+    from public.couples c
+    where c.id = p_couple_id
+      and auth.uid() is not null
+      and not exists (
+        select 1 from public.couple_members
+        where couple_id = c.id and user_id = auth.uid()
+      )
+      and not exists (
+        select 1 from public.couple_members where user_id = auth.uid()
+      )
+      and (select count(*) from public.couple_members where couple_id = c.id) < 2
+    returning couple_id
+  )
+  select c.*
+  from public.couples c
+  where c.id = p_couple_id
+    and (
+      c.id in (select couple_id from inserted)
+      or exists (
+        select 1 from public.couple_members
+        where couple_id = c.id and user_id = auth.uid()
+      )
+    );
 $$;
 
 grant execute on function public.join_couple(uuid) to authenticated;
 
 -- RPC: leave the current couple. Deletes couple when last member leaves.
+drop function if exists public.leave_couple();
 create or replace function public.leave_couple()
 returns void
-language plpgsql
+language sql
 security definer
+volatile
 set search_path = public
 as $$
-declare
-  v_user_id uuid := auth.uid();
-  v_couple_id uuid;
-  v_remaining int;
-begin
-  if v_user_id is null then raise exception 'not authenticated'; end if;
-  select couple_id into v_couple_id from public.couple_members where user_id = v_user_id;
-  if v_couple_id is null then return; end if;
-  delete from public.couple_members where user_id = v_user_id;
-  select count(*)::int into v_remaining from public.couple_members where couple_id = v_couple_id;
-  if v_remaining = 0 then
-    delete from public.couples where id = v_couple_id;
-  end if;
-end;
+  with me as (
+    select user_id, couple_id from public.couple_members
+    where user_id = auth.uid()
+  ),
+  removed as (
+    delete from public.couple_members
+    where user_id in (select user_id from me)
+    returning couple_id
+  )
+  delete from public.couples c
+  where c.id in (select couple_id from removed)
+    and not exists (
+      select 1 from public.couple_members cm where cm.couple_id = c.id
+    );
 $$;
 
 grant execute on function public.leave_couple() to authenticated;
@@ -1103,3 +1123,767 @@ begin
   return new;
 end;
 $$;
+
+-- =========================================================================
+-- Trophies v2 — expanded catalog
+-- -------------------------------------------------------------------------
+-- Adds: couple-centric, speed, volume/longevity, difficulty/skill,
+-- calendar/cadence, social (via couple_members.invited_by), anti-
+-- achievements (tier='rib'). Per-period trophies use a new `period_key`
+-- text column (ISO week / YYYY-MM / YYYY) for stackable/time-scoped
+-- uniqueness.
+-- =========================================================================
+
+-- Extend tier check to include 'rib' for anti-achievements.
+do $$
+begin
+  alter table public.trophies drop constraint if exists trophies_tier_check;
+  alter table public.trophies
+    add constraint trophies_tier_check
+    check (tier in ('bronze', 'silver', 'gold', 'platinum', 'rib'));
+end$$;
+
+alter table public.trophies add column if not exists period_key text;
+
+create unique index if not exists trophies_period_unique
+  on public.trophies (user_id, kind, period_key)
+  where period_key is not null;
+
+create unique index if not exists trophies_lifetime_unique
+  on public.trophies (user_id, kind)
+  where puzzle_id is null and streak_length is null and period_key is null;
+
+-- Social: who invited whom. Populated by join_couple.
+alter table public.couple_members add column if not exists invited_by uuid
+  references auth.users(id) on delete set null;
+
+-- Record the inviter (creator of the couple) when a non-creator joins.
+drop function if exists public.join_couple(uuid);
+create or replace function public.join_couple(p_couple_id uuid)
+returns setof public.couples
+language sql
+security definer
+volatile
+set search_path = public
+as $$
+  with target as (
+    select * from public.couples where id = p_couple_id
+  ),
+  inserted as (
+    insert into public.couple_members (couple_id, user_id, role, invited_by)
+    select t.id, auth.uid(), 'member', t.created_by
+    from target t
+    where auth.uid() is not null
+      and not exists (
+        select 1 from public.couple_members
+        where user_id = auth.uid()
+      )
+      and (select count(*) from public.couple_members where couple_id = t.id) < 2
+    returning couple_id
+  )
+  select c.* from public.couples c
+  where c.id = p_couple_id
+    and (
+      c.id in (select couple_id from inserted)
+      or exists (
+        select 1 from public.couple_members
+        where couple_id = c.id and user_id = auth.uid()
+      )
+    );
+$$;
+
+-- -------------------------------------------------------------------------
+-- Master awarder — v2. Covers every new trophy kind. Idempotent.
+-- -------------------------------------------------------------------------
+create or replace function public.award_trophies_for_attempt(p_attempt_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_attempt record;
+  v_date date;
+  v_upper_word text;
+  v_streak int := 0;
+  v_cursor date;
+  v_has_win boolean;
+  v_partner_id uuid;
+  v_partner_attempt record;
+  v_finish_count int;
+  v_win_count int;
+  v_perfect_count int;
+  v_iso_year int;
+  v_iso_week int;
+  v_iso_week_start date;
+  v_iso_week_end date;
+  v_all_iso_week_wins boolean;
+  v_updated_ts_denver timestamp;
+  v_hour_denver int;
+  v_before_count int;
+  v_late_count int;
+  v_sat_win boolean;
+  v_sun_win boolean;
+  v_month_start date;
+  v_month_end date;
+  v_month_all_win boolean;
+  v_dcheck date;
+  v_win_on_dcheck boolean;
+  v_couple_id uuid;
+  v_rows_text text[];
+begin
+  select pa.id, pa.user_id, pa.puzzle_id, pa.win, pa.finished, pa.guesses_used,
+         pa.rows, pa.time_ms, pa.updated_at,
+         p.date as puzzle_date, p.word as puzzle_word
+  into v_attempt
+  from public.puzzle_attempts pa
+  join public.puzzles p on p.id = pa.puzzle_id
+  where pa.id = p_attempt_id;
+
+  if not found then return; end if;
+  if not v_attempt.finished then return; end if;
+  if not v_attempt.win then return; end if;
+
+  v_date := v_attempt.puzzle_date;
+  v_upper_word := upper(v_attempt.puzzle_word);
+
+  -- Normalize v_attempt.rows to text[] regardless of legacy column type.
+  -- Some older installs stored this column as jsonb; `unnest(jsonb)` does
+  -- not exist, so branch on the runtime type and coerce.
+  if pg_typeof(v_attempt.rows) = 'text[]'::regtype then
+    v_rows_text := v_attempt.rows::text[];
+  else
+    v_rows_text := coalesce(
+      (select array(
+        select jsonb_array_elements_text(v_attempt.rows::jsonb)
+      )),
+      '{}'::text[]
+    );
+  end if;
+
+  -- =========== Per-puzzle win-based trophies =================================
+  insert into public.trophies (user_id, kind, tier, puzzle_id)
+  values (v_attempt.user_id, 'win', 'bronze', v_attempt.puzzle_id)
+  on conflict do nothing;
+
+  if v_attempt.guesses_used <= 3 then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'sub_3', 'silver', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  if v_attempt.guesses_used = 1 then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'perfect', 'gold', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  if v_attempt.guesses_used = 6 then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'comeback', 'silver', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  -- "Green only" — no yellow ('present') evaluations across all submitted rows.
+  -- Computed in plpgsql-lite: any non-answer position sharing a letter with
+  -- the answer would become 'present'. Easier correct check: for every row
+  -- before the final guess, none of its letters appear in the answer
+  -- except at their matching position.
+  if coalesce((
+    select bool_and(
+      not exists (
+        select 1
+        from generate_series(1, length(r)) gs(i)
+        where
+          substring(r from i for 1) <> ' '
+          and position(upper(substring(r from i for 1)) in v_upper_word) > 0
+          and upper(substring(r from i for 1)) <> substring(v_upper_word from i for 1)
+      )
+    )
+    from unnest(v_rows_text) as r
+  ), false) then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'green_only', 'silver', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  -- Hard letter: won a puzzle whose answer contains J, Q, X, or Z
+  if v_upper_word ~ '[JQXZ]' then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'hard_letter', 'bronze', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  -- Double trouble: answer contains at least one doubled letter
+  if (
+    select count(distinct ch) < length(v_upper_word)
+    from unnest(string_to_array(v_upper_word, null)) ch
+  ) then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'double_trouble', 'bronze', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  -- =========== Speed trophies =================================================
+  if v_attempt.time_ms > 0 then
+    if v_attempt.time_ms < 60000 then
+      insert into public.trophies (user_id, kind, tier, puzzle_id)
+      values (v_attempt.user_id, 'sub_minute', 'bronze', v_attempt.puzzle_id)
+      on conflict do nothing;
+    end if;
+    if v_attempt.time_ms < 30000 then
+      insert into public.trophies (user_id, kind, tier, puzzle_id)
+      values (v_attempt.user_id, 'blitz_30', 'silver', v_attempt.puzzle_id)
+      on conflict do nothing;
+    end if;
+    if v_attempt.time_ms < 10000 then
+      insert into public.trophies (user_id, kind, tier, puzzle_id)
+      values (v_attempt.user_id, 'lightning_10', 'gold', v_attempt.puzzle_id)
+      on conflict do nothing;
+    end if;
+  end if;
+
+  -- =========== Calendar / cadence (date-locked) =============================
+  if extract(month from v_date) = 1 and extract(day from v_date) = 1 then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'new_year_w', 'bronze', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  -- Morning / Night person (America/Denver local hour on updated_at)
+  v_updated_ts_denver := (v_attempt.updated_at at time zone 'America/Denver');
+  v_hour_denver := extract(hour from v_updated_ts_denver);
+
+  if v_hour_denver < 9 then
+    select count(*) into v_before_count
+    from public.puzzle_attempts pa
+    where pa.user_id = v_attempt.user_id
+      and pa.finished = true
+      and extract(hour from (pa.updated_at at time zone 'America/Denver')) < 9;
+    if v_before_count >= 10 then
+      insert into public.trophies (user_id, kind, tier)
+      values (v_attempt.user_id, 'morning_person_mst', 'bronze')
+      on conflict do nothing;
+    end if;
+  end if;
+
+  if v_hour_denver >= 23 then
+    select count(*) into v_late_count
+    from public.puzzle_attempts pa
+    where pa.user_id = v_attempt.user_id
+      and pa.finished = true
+      and extract(hour from (pa.updated_at at time zone 'America/Denver')) >= 23;
+    if v_late_count >= 10 then
+      insert into public.trophies (user_id, kind, tier)
+      values (v_attempt.user_id, 'night_owl_mst', 'bronze')
+      on conflict do nothing;
+    end if;
+  end if;
+
+  -- Weekender: won both Sat and Sun of the ISO week containing v_date
+  v_iso_year := extract(isoyear from v_date)::int;
+  v_iso_week := extract(week from v_date)::int;
+  v_iso_week_start := date_trunc('week', v_date)::date; -- Monday
+  v_iso_week_end := v_iso_week_start + 6;
+
+  select exists (
+    select 1 from public.puzzle_attempts pa
+    join public.puzzles p on p.id = pa.puzzle_id
+    where pa.user_id = v_attempt.user_id
+      and pa.win = true and pa.finished = true
+      and p.date = v_iso_week_start + 5 -- Saturday
+  ) into v_sat_win;
+  select exists (
+    select 1 from public.puzzle_attempts pa
+    join public.puzzles p on p.id = pa.puzzle_id
+    where pa.user_id = v_attempt.user_id
+      and pa.win = true and pa.finished = true
+      and p.date = v_iso_week_start + 6 -- Sunday
+  ) into v_sun_win;
+  if v_sat_win and v_sun_win then
+    insert into public.trophies (user_id, kind, tier, period_key)
+    values (v_attempt.user_id, 'weekender', 'bronze', format('%s-W%s', v_iso_year, lpad(v_iso_week::text, 2, '0')))
+    on conflict do nothing;
+  end if;
+
+  -- Weekly 7: won every day in the ISO week (Mon-Sun)
+  select bool_and(
+    exists (
+      select 1 from public.puzzle_attempts pa
+      join public.puzzles p on p.id = pa.puzzle_id
+      where pa.user_id = v_attempt.user_id
+        and pa.win = true and pa.finished = true
+        and p.date = d
+    )
+  ) into v_all_iso_week_wins
+  from generate_series(v_iso_week_start, v_iso_week_end, '1 day'::interval) as d;
+
+  if v_all_iso_week_wins then
+    insert into public.trophies (user_id, kind, tier, period_key)
+    values (v_attempt.user_id, 'weekly_7', 'bronze',
+            format('%s-W%s', v_iso_year, lpad(v_iso_week::text, 2, '0')))
+    on conflict do nothing;
+  end if;
+
+  -- Monthly sweep: every day in the calendar month of v_date was a win
+  v_month_start := date_trunc('month', v_date)::date;
+  v_month_end := (v_month_start + interval '1 month' - interval '1 day')::date;
+  v_month_all_win := true;
+  v_dcheck := v_month_start;
+  while v_dcheck <= v_month_end loop
+    select exists (
+      select 1 from public.puzzle_attempts pa
+      join public.puzzles p on p.id = pa.puzzle_id
+      where pa.user_id = v_attempt.user_id
+        and pa.win = true and pa.finished = true
+        and p.date = v_dcheck
+    ) into v_win_on_dcheck;
+    if not v_win_on_dcheck then
+      v_month_all_win := false;
+      exit;
+    end if;
+    v_dcheck := v_dcheck + 1;
+  end loop;
+  if v_month_all_win then
+    insert into public.trophies (user_id, kind, tier, period_key)
+    values (v_attempt.user_id, 'monthly_sweep', 'platinum', to_char(v_month_start, 'YYYY-MM'))
+    on conflict do nothing;
+  end if;
+
+  -- =========== Daily streak milestones =====================================
+  v_cursor := v_date;
+  v_streak := 0;
+  loop
+    select exists (
+      select 1
+      from public.puzzle_attempts pa
+      join public.puzzles p on p.id = pa.puzzle_id
+      where pa.user_id = v_attempt.user_id
+        and pa.win = true
+        and pa.finished = true
+        and p.date = v_cursor
+    ) into v_has_win;
+    if not v_has_win then exit; end if;
+    v_streak := v_streak + 1;
+    v_cursor := v_cursor - 1;
+  end loop;
+
+  if v_streak >= 7 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'streak_7', 'bronze', 7) on conflict do nothing;
+  end if;
+  if v_streak >= 14 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'streak_14', 'silver', 14) on conflict do nothing;
+  end if;
+  if v_streak >= 30 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'streak_30', 'gold', 30) on conflict do nothing;
+  end if;
+
+  -- =========== Volume / longevity (lifetime) ================================
+  select count(*) into v_finish_count
+  from public.puzzle_attempts
+  where user_id = v_attempt.user_id and finished = true;
+  select count(*) into v_win_count
+  from public.puzzle_attempts
+  where user_id = v_attempt.user_id and finished = true and win = true;
+  select count(*) into v_perfect_count
+  from public.puzzle_attempts
+  where user_id = v_attempt.user_id and finished = true and win = true and guesses_used = 1;
+
+  if v_finish_count >= 30 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'regular_30', 'bronze', 30) on conflict do nothing;
+  end if;
+  if v_finish_count >= 100 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'centenarian_100', 'silver', 100) on conflict do nothing;
+  end if;
+  if v_finish_count >= 365 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'year_one_365', 'gold', 365) on conflict do nothing;
+  end if;
+  if v_win_count >= 100 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'wins_100', 'silver', 100) on conflict do nothing;
+  end if;
+  if v_win_count >= 1000 then
+    insert into public.trophies (user_id, kind, tier, streak_length)
+    values (v_attempt.user_id, 'wins_1000', 'platinum', 1000) on conflict do nothing;
+  end if;
+  if v_perfect_count >= 2 then
+    insert into public.trophies (user_id, kind, tier)
+    values (v_attempt.user_id, 'perfectionist', 'gold') on conflict do nothing;
+  end if;
+
+  -- =========== Couple trophies ==============================================
+  select couple_id into v_couple_id
+  from public.couple_members where user_id = v_attempt.user_id;
+
+  if v_couple_id is not null then
+    select cm.user_id into v_partner_id
+    from public.couple_members cm
+    where cm.couple_id = v_couple_id and cm.user_id <> v_attempt.user_id
+    limit 1;
+
+    if v_partner_id is not null then
+      select pa.user_id, pa.puzzle_id, pa.win, pa.finished, pa.guesses_used, pa.updated_at
+      into v_partner_attempt
+      from public.puzzle_attempts pa
+      where pa.user_id = v_partner_id and pa.puzzle_id = v_attempt.puzzle_id;
+
+      if v_partner_attempt.user_id is not null and v_partner_attempt.finished then
+        -- Sync: both finished the same puzzle (win or not)
+        insert into public.trophies (user_id, kind, tier, puzzle_id)
+        values (v_attempt.user_id, 'couple_sync', 'bronze', v_attempt.puzzle_id) on conflict do nothing;
+        insert into public.trophies (user_id, kind, tier, puzzle_id)
+        values (v_partner_id, 'couple_sync', 'bronze', v_attempt.puzzle_id) on conflict do nothing;
+
+        -- Tag team: both WON the same puzzle
+        if v_partner_attempt.win then
+          insert into public.trophies (user_id, kind, tier, puzzle_id)
+          values (v_attempt.user_id, 'couple_tag_team', 'silver', v_attempt.puzzle_id) on conflict do nothing;
+          insert into public.trophies (user_id, kind, tier, puzzle_id)
+          values (v_partner_id, 'couple_tag_team', 'silver', v_attempt.puzzle_id) on conflict do nothing;
+
+          -- Mirror match: same guess count
+          if v_partner_attempt.guesses_used = v_attempt.guesses_used then
+            insert into public.trophies (user_id, kind, tier, puzzle_id)
+            values (v_attempt.user_id, 'couple_mirror', 'gold', v_attempt.puzzle_id) on conflict do nothing;
+            insert into public.trophies (user_id, kind, tier, puzzle_id)
+            values (v_partner_id, 'couple_mirror', 'gold', v_attempt.puzzle_id) on conflict do nothing;
+          end if;
+        end if;
+
+        -- Pace keeper: finished within 1 hour of each other
+        if abs(extract(epoch from (v_partner_attempt.updated_at - v_attempt.updated_at))) <= 3600 then
+          insert into public.trophies (user_id, kind, tier, puzzle_id)
+          values (v_attempt.user_id, 'couple_pace', 'bronze', v_attempt.puzzle_id) on conflict do nothing;
+          insert into public.trophies (user_id, kind, tier, puzzle_id)
+          values (v_partner_id, 'couple_pace', 'bronze', v_attempt.puzzle_id) on conflict do nothing;
+        end if;
+
+        -- Valentine sync
+        if extract(month from v_date) = 2 and extract(day from v_date) = 14 and v_partner_attempt.win then
+          insert into public.trophies (user_id, kind, tier, puzzle_id)
+          values (v_attempt.user_id, 'valentine_sync', 'gold', v_attempt.puzzle_id) on conflict do nothing;
+          insert into public.trophies (user_id, kind, tier, puzzle_id)
+          values (v_partner_id, 'valentine_sync', 'gold', v_attempt.puzzle_id) on conflict do nothing;
+        end if;
+
+        -- Kingmaker: awarded to inviter when invitee wins a Daily W
+        declare v_inviter_id uuid;
+        begin
+          select invited_by into v_inviter_id
+          from public.couple_members
+          where user_id = v_attempt.user_id;
+          if v_inviter_id is not null then
+            insert into public.trophies (user_id, kind, tier, puzzle_id)
+            values (v_inviter_id, 'kingmaker', 'gold', v_attempt.puzzle_id) on conflict do nothing;
+          end if;
+        end;
+      end if;
+
+      -- Couple streaks (consecutive days where BOTH won)
+      declare
+        v_cstreak int := 0;
+        v_ccursor date := v_date;
+        v_both_win boolean;
+      begin
+        loop
+          select (
+            exists (
+              select 1 from public.puzzle_attempts pa
+              join public.puzzles p on p.id = pa.puzzle_id
+              where pa.user_id = v_attempt.user_id
+                and pa.win = true and pa.finished = true and p.date = v_ccursor
+            )
+            and exists (
+              select 1 from public.puzzle_attempts pa
+              join public.puzzles p on p.id = pa.puzzle_id
+              where pa.user_id = v_partner_id
+                and pa.win = true and pa.finished = true and p.date = v_ccursor
+            )
+          ) into v_both_win;
+          if not v_both_win then exit; end if;
+          v_cstreak := v_cstreak + 1;
+          v_ccursor := v_ccursor - 1;
+        end loop;
+
+        if v_cstreak >= 7 then
+          insert into public.trophies (user_id, kind, tier, streak_length)
+          values (v_attempt.user_id, 'couple_streak_7', 'bronze', 7) on conflict do nothing;
+          insert into public.trophies (user_id, kind, tier, streak_length)
+          values (v_partner_id, 'couple_streak_7', 'bronze', 7) on conflict do nothing;
+        end if;
+        if v_cstreak >= 14 then
+          insert into public.trophies (user_id, kind, tier, streak_length)
+          values (v_attempt.user_id, 'couple_streak_14', 'silver', 14) on conflict do nothing;
+          insert into public.trophies (user_id, kind, tier, streak_length)
+          values (v_partner_id, 'couple_streak_14', 'silver', 14) on conflict do nothing;
+        end if;
+        if v_cstreak >= 30 then
+          insert into public.trophies (user_id, kind, tier, streak_length)
+          values (v_attempt.user_id, 'couple_streak_30', 'gold', 30) on conflict do nothing;
+          insert into public.trophies (user_id, kind, tier, streak_length)
+          values (v_partner_id, 'couple_streak_30', 'gold', 30) on conflict do nothing;
+        end if;
+      end;
+    end if;
+  end if;
+end;
+$$;
+
+-- -------------------------------------------------------------------------
+-- Social onboarding trophies (one-shot; fire outside the per-attempt path)
+-- Called from the couple_members INSERT trigger.
+-- -------------------------------------------------------------------------
+create or replace function public.award_matched_and_hype(p_user_id uuid, p_inviter_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_invite_count int;
+begin
+  -- Matched: first time user joined/created a couple
+  insert into public.trophies (user_id, kind, tier)
+  values (p_user_id, 'matched', 'bronze') on conflict do nothing;
+  if p_inviter_id is not null then
+    insert into public.trophies (user_id, kind, tier)
+    values (p_inviter_id, 'matched', 'bronze') on conflict do nothing;
+
+    select count(distinct user_id) into v_invite_count
+    from public.couple_members
+    where invited_by = p_inviter_id;
+
+    if v_invite_count >= 3 then
+      insert into public.trophies (user_id, kind, tier)
+      values (p_inviter_id, 'hype_man', 'silver') on conflict do nothing;
+    end if;
+  end if;
+end;
+$$;
+
+create or replace function public.tg_couple_members_award_social()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.award_matched_and_hype(new.user_id, new.invited_by);
+  return new;
+end;
+$$;
+
+drop trigger if exists couple_members_award_social on public.couple_members;
+create trigger couple_members_award_social
+after insert on public.couple_members
+for each row execute function public.tg_couple_members_award_social();
+
+-- -------------------------------------------------------------------------
+-- Anti-achievement awarder — fires on finished=true regardless of win.
+-- -------------------------------------------------------------------------
+create or replace function public.award_anti_trophies_for_attempt(p_attempt_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_attempt record;
+  v_prev_date date;
+  v_prev_lost boolean;
+  v_partner_id uuid;
+  v_partner_won boolean;
+  v_couple_id uuid;
+begin
+  select pa.user_id, pa.puzzle_id, pa.win, pa.finished, pa.guesses_used,
+         p.date as puzzle_date
+  into v_attempt
+  from public.puzzle_attempts pa
+  join public.puzzles p on p.id = pa.puzzle_id
+  where pa.id = p_attempt_id;
+
+  if not found then return; end if;
+  if not v_attempt.finished then return; end if;
+  if v_attempt.win then return; end if; -- anti-achievements only on losses
+
+  -- Houdini: lost two puzzles in a row
+  v_prev_date := v_attempt.puzzle_date - 1;
+  select exists (
+    select 1 from public.puzzle_attempts pa
+    join public.puzzles p on p.id = pa.puzzle_id
+    where pa.user_id = v_attempt.user_id
+      and pa.finished = true and pa.win = false
+      and p.date = v_prev_date
+  ) into v_prev_lost;
+  if v_prev_lost then
+    insert into public.trophies (user_id, kind, tier, puzzle_id)
+    values (v_attempt.user_id, 'houdini', 'rib', v_attempt.puzzle_id)
+    on conflict do nothing;
+  end if;
+
+  -- Heartbreak: I lost but my partner won this puzzle
+  select couple_id into v_couple_id
+  from public.couple_members where user_id = v_attempt.user_id;
+  if v_couple_id is not null then
+    select cm.user_id into v_partner_id
+    from public.couple_members cm
+    where cm.couple_id = v_couple_id and cm.user_id <> v_attempt.user_id
+    limit 1;
+    if v_partner_id is not null then
+      select exists (
+        select 1 from public.puzzle_attempts pa
+        where pa.user_id = v_partner_id
+          and pa.puzzle_id = v_attempt.puzzle_id
+          and pa.finished = true and pa.win = true
+      ) into v_partner_won;
+      if v_partner_won then
+        insert into public.trophies (user_id, kind, tier, puzzle_id)
+        values (v_attempt.user_id, 'heartbreak', 'rib', v_attempt.puzzle_id)
+        on conflict do nothing;
+      end if;
+    end if;
+  end if;
+end;
+$$;
+
+-- Update the attempts trigger to run both awarders on every finished row.
+create or replace function public.tg_puzzle_attempts_award_trophies()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.finished = true then
+    if new.win = true then
+      perform public.award_trophies_for_attempt(new.id);
+    else
+      perform public.award_anti_trophies_for_attempt(new.id);
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists puzzle_attempts_award_trophies on public.puzzle_attempts;
+create trigger puzzle_attempts_award_trophies
+after insert or update of finished, win on public.puzzle_attempts
+for each row execute function public.tg_puzzle_attempts_award_trophies();
+
+-- -------------------------------------------------------------------------
+-- Backfill v2 — replay both awarders over every finished attempt, in date
+-- order, so cumulative counts + streaks + couple trophies resolve correctly.
+-- -------------------------------------------------------------------------
+do $$
+declare
+  r record;
+begin
+  for r in
+    select pa.id, pa.win
+    from public.puzzle_attempts pa
+    join public.puzzles p on p.id = pa.puzzle_id
+    where pa.finished = true
+    order by p.date asc, pa.created_at asc
+  loop
+    if r.win then
+      perform public.award_trophies_for_attempt(r.id);
+    else
+      perform public.award_anti_trophies_for_attempt(r.id);
+    end if;
+  end loop;
+end$$;
+
+-- Social backfill: award 'matched' to every existing couple member.
+do $$
+declare
+  r record;
+begin
+  for r in select user_id, invited_by from public.couple_members loop
+    perform public.award_matched_and_hype(r.user_id, r.invited_by);
+  end loop;
+end$$;
+
+-- -------------------------------------------------------------------------
+-- fetch_trophy_progress RPC — one-shot aggregate of everything the
+-- TrophyShelf progress bars need.
+-- -------------------------------------------------------------------------
+create or replace function public.fetch_trophy_progress(p_user_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v jsonb := '{}'::jsonb;
+  v_finishes int;
+  v_wins int;
+  v_perfect int;
+  v_sub3 int;
+  v_best_ms bigint;
+  v_current_streak int := 0;
+  v_today date := (now() at time zone 'utc')::date;
+  v_cursor date;
+  v_has_win boolean;
+  v_morning int;
+  v_night int;
+  v_couple_sync int;
+  v_invites int;
+begin
+  select count(*) into v_finishes from public.puzzle_attempts where user_id = p_user_id and finished = true;
+  select count(*) into v_wins from public.puzzle_attempts where user_id = p_user_id and finished = true and win = true;
+  select count(*) into v_sub3 from public.puzzle_attempts where user_id = p_user_id and finished = true and win = true and guesses_used <= 3;
+  select count(*) into v_perfect from public.puzzle_attempts where user_id = p_user_id and finished = true and win = true and guesses_used = 1;
+  select coalesce(min(time_ms) filter (where time_ms > 0), 0) into v_best_ms from public.puzzle_attempts where user_id = p_user_id and finished = true and win = true;
+
+  -- Current streak ending yesterday or today
+  v_cursor := v_today;
+  loop
+    select exists (
+      select 1 from public.puzzle_attempts pa join public.puzzles p on p.id = pa.puzzle_id
+      where pa.user_id = p_user_id and pa.win = true and pa.finished = true and p.date = v_cursor
+    ) into v_has_win;
+    exit when not v_has_win and v_cursor <> v_today;
+    if v_has_win then
+      v_current_streak := v_current_streak + 1;
+    end if;
+    v_cursor := v_cursor - 1;
+    exit when v_cursor < v_today - 400;
+  end loop;
+
+  select count(*) into v_morning from public.puzzle_attempts pa
+   where pa.user_id = p_user_id and pa.finished = true
+     and extract(hour from (pa.updated_at at time zone 'America/Denver')) < 9;
+  select count(*) into v_night from public.puzzle_attempts pa
+   where pa.user_id = p_user_id and pa.finished = true
+     and extract(hour from (pa.updated_at at time zone 'America/Denver')) >= 23;
+
+  select count(*) into v_couple_sync from public.trophies
+   where user_id = p_user_id and kind = 'couple_sync';
+
+  select count(distinct user_id) into v_invites
+   from public.couple_members where invited_by = p_user_id;
+
+  v := jsonb_build_object(
+    'finishes', v_finishes,
+    'wins', v_wins,
+    'sub3_wins', v_sub3,
+    'perfect_wins', v_perfect,
+    'best_time_ms', v_best_ms,
+    'current_streak', v_current_streak,
+    'morning_finishes_denver', v_morning,
+    'night_finishes_denver', v_night,
+    'couple_syncs', v_couple_sync,
+    'invites_accepted', v_invites
+  );
+  return v;
+end;
+$$;
+
+grant execute on function public.fetch_trophy_progress(uuid) to authenticated;
