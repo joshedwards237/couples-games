@@ -7,16 +7,56 @@ import { cn } from '@/lib/utils';
  * waiting. Clicking "Reload" activates the new SW and refreshes the
  * page so the latest JS/CSS bundles take effect immediately.
  *
- * Without this, users who have the site cached from a previous deploy
- * stay on the old bundle until they close the tab (or manually reload
- * with caches bypassed), which is how deploys quietly fail to reach
- * existing users.
+ * To keep the flow to a single reload after a deploy, we:
+ *   1. Kick `registration.update()` the instant the SW is registered, so
+ *      the new sw.js is fetched at page-load time instead of on the
+ *      browser's internal cache schedule.
+ *   2. Re-run `registration.update()` whenever the tab becomes visible /
+ *      focused, so background tabs that were open during a deploy pick
+ *      up the update the moment the user comes back to them.
+ * Combined, the user sees the "New version available" toast almost
+ * immediately after a deploy, without needing multiple refreshes.
  */
+const UPDATE_POLL_MS = 60_000;
+
 export function PwaUpdatePrompt() {
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker
   } = useRegisterSW({
+    onRegisteredSW(_swUrl, registration) {
+      if (!registration) return;
+
+      // Swallow transient failures — an offline laptop shouldn't fire
+      // unhandled-rejection warnings.
+      const checkForUpdate = () => {
+        registration.update().catch(() => {
+          /* noop */
+        });
+      };
+
+      // Once the prompt is showing there's nothing left to check for.
+      const shouldCheck = () =>
+        document.visibilityState === 'visible' && !registration.waiting;
+
+      // Immediate check on registration.
+      if (shouldCheck()) checkForUpdate();
+
+      // Re-check whenever the tab becomes visible or regains focus, so
+      // long-lived tabs pick up the update the moment the user returns.
+      const onVisible = () => {
+        if (shouldCheck()) checkForUpdate();
+      };
+      document.addEventListener('visibilitychange', onVisible);
+      window.addEventListener('focus', onVisible);
+
+      // Belt-and-braces poll while the tab is open and visible AND no
+      // waiting SW has arrived yet. Listeners outlive the component —
+      // there's only ever one PwaUpdatePrompt mount per session.
+      window.setInterval(() => {
+        if (shouldCheck()) checkForUpdate();
+      }, UPDATE_POLL_MS);
+    },
     onRegisterError(err: unknown) {
       console.error('SW registration failed', err);
     }
