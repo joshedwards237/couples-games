@@ -27,7 +27,7 @@ export function CompletedBoard({ answer, rows }: Props) {
   }, [rows.length, targetLength]);
 
   return (
-    <Card className="space-y-5 rounded-lg border-2 border-accent bg-white/80 p-5 backdrop-blur">
+    <Card className="space-y-5 rounded-lg border-2 border-accent bg-white/80 p-3 backdrop-blur sm:p-5">
       <div className="space-y-2">
         {slots.map((_, rowIdx) => {
           const guess = rows[rowIdx] ?? '';
@@ -37,7 +37,7 @@ export function CompletedBoard({ answer, rows }: Props) {
             : Array.from({ length: targetLength }, () => 'unknown');
           const letters = guess.toUpperCase().split('');
           return (
-            <div key={rowIdx} className="flex justify-center gap-2 rounded-md bg-white/30 px-2 py-1">
+            <div key={rowIdx} className="flex w-full gap-1.5 rounded-md bg-white/30 px-1 py-1 sm:gap-2 sm:px-2">
               {Array.from({ length: targetLength }).map((__, col) => {
                 const delay = rowIdx * ROW_OFFSET_MS + col * COL_STAGGER_MS;
                 return (
@@ -80,7 +80,7 @@ function Tile({
   return (
     <div
       className={cn(
-        'grid h-12 w-12 select-none place-items-center rounded-md border text-lg font-bold',
+        'grid aspect-square w-full min-w-0 max-w-[56px] basis-0 flex-1 select-none place-items-center rounded-md border text-lg font-bold',
         animate && 'animate-flip',
         colors[state]
       )}

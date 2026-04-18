@@ -238,7 +238,7 @@ export function Board({ answer, onComplete }: BoardProps) {
   };
 
   return (
-    <Card className="space-y-5 rounded-lg border-2 border-accent bg-white/80 p-5 backdrop-blur">
+    <Card className="space-y-5 rounded-lg border-2 border-accent bg-white/80 p-3 backdrop-blur sm:p-5">
       <div className="space-y-2">
         {rows.map((_, rowIdx) => {
           const isActiveRow = rowIdx === guesses.length;
@@ -259,7 +259,7 @@ export function Board({ answer, onComplete }: BoardProps) {
             <div
               key={rowIdx}
               className={cn(
-                'flex gap-2 justify-center rounded-md px-2 py-1 transition-colors',
+                'flex w-full gap-1.5 rounded-md px-1 py-1 transition-colors sm:gap-2 sm:px-2',
                 isActiveRow ? 'bg-surface/70' : 'bg-white/30'
               )}
             >
@@ -364,7 +364,7 @@ function Tile({
   return (
     <div
       className={cn(
-        'h-12 w-12 rounded-md border grid place-items-center text-lg font-bold',
+        'grid aspect-square w-full min-w-0 max-w-[56px] basis-0 flex-1 place-items-center rounded-md border text-lg font-bold',
         'select-none',
         animate && !falling && 'animate-flip',
         falling && 'animate-tile-fall',

@@ -56,6 +56,23 @@ export async function fetchTrophyCountsForUsers(userIds: string[]): Promise<Map<
   return map;
 }
 
+/**
+ * Returns the set of user_ids who earned the `win` (Daily W, head-to-head)
+ * trophy for a specific puzzle. Used by the leaderboard to flag the
+ * partner-versus-partner winner with a 🏆 next to their name.
+ */
+export async function fetchWinnersForPuzzle(puzzleId: string): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('trophies')
+    .select('user_id')
+    .eq('puzzle_id', puzzleId)
+    .eq('kind', 'win');
+  if (error) throw error;
+  const set = new Set<string>();
+  for (const row of (data ?? []) as Array<{ user_id: string }>) set.add(row.user_id);
+  return set;
+}
+
 export async function fetchTrophiesForPuzzle(userId: string, puzzleId: string): Promise<Trophy[]> {
   const { data, error } = await supabase
     .from('trophies')

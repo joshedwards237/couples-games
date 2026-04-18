@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Trophy } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
@@ -14,19 +15,42 @@ import {
 import { Button } from '@/components/ui/button';
 import { usePranks } from '@/context/PrankContext';
 import { cn } from '@/lib/utils';
-import { fetchTrophyCountsForUsers } from '@/lib/trophies';
+import { fetchTrophyCountsForUsers, fetchWinnersForPuzzle } from '@/lib/trophies';
 import type { LeaderboardEntry, LetterEval } from '@/lib/types';
 
 interface Props {
   entries: LeaderboardEntry[];
   loading?: boolean;
+  /** When provided, flags users who earned today's Daily W trophy. */
+  puzzleId?: string | null;
 }
 
-export function Leaderboard({ entries, loading }: Props) {
+export function Leaderboard({ entries, loading, puzzleId }: Props) {
+  const navigate = useNavigate();
   const [openEntry, setOpenEntry] = useState<LeaderboardEntry | null>(null);
   const [trophyCounts, setTrophyCounts] = useState<Map<string, number>>(new Map());
+  const [todayWinners, setTodayWinners] = useState<Set<string>>(new Set());
   const { config, adminUserIds } = usePranks();
   const impostorCfg = config['impostor_badge'];
+
+  useEffect(() => {
+    if (!puzzleId) {
+      setTodayWinners(new Set());
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const ids = await fetchWinnersForPuzzle(puzzleId);
+        if (!cancelled) setTodayWinners(ids);
+      } catch {
+        /* ignore — no crown shown on failure */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [puzzleId]);
 
   const userIdsKey = useMemo(() => entries.map((e) => e.userId).sort().join(','), [entries]);
 
@@ -144,6 +168,15 @@ export function Leaderboard({ entries, loading }: Props) {
                   <span className={cn(isImpostor(entry) && 'text-textSecondary line-through decoration-textSecondary/60')}>
                     {entry.displayName}
                   </span>
+                  {todayWinners.has(entry.userId) && (
+                    <span
+                      className="ml-1 inline-flex items-center rounded-full bg-accent/15 px-1.5 py-0.5 align-middle text-accent"
+                      title="Daily W — beat their partner"
+                      aria-label="Daily W — beat their partner"
+                    >
+                      <Trophy className="h-3 w-3" />
+                    </span>
+                  )}
                   {isImpostor(entry) && (
                     <span className="ml-1 rounded-sm bg-red-500/10 px-1 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-600">
                       bot
@@ -202,6 +235,16 @@ export function Leaderboard({ entries, loading }: Props) {
                     Close
                   </Button>
                 </DialogClose>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const uid = openEntry.userId;
+                    setOpenEntry(null);
+                    navigate(`/users/${uid}`);
+                  }}
+                >
+                  View profile
+                </Button>
               </DialogFooter>
             </>
           )}

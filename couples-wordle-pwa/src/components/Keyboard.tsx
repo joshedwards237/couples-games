@@ -19,21 +19,38 @@ export function Keyboard({ onKey, keyStates = {}, enterMovesAway = false }: Keyb
   const rows = [Array.from('QWERTYUIOP'), Array.from('ASDFGHJKL'), Array.from('ZXCVBNM')];
 
   return (
-    <div className="space-y-2">
+    <div className="mx-auto w-full max-w-[560px] space-y-1.5 px-0">
       {rows.map((row, ri) => (
-        <div key={ri} className="flex gap-2 justify-center">
+        <div key={ri} className="flex w-full gap-1 sm:gap-1.5">
+          {/* Middle row: half-key spacers so letters align under row 1 */}
+          {ri === 1 && <span className="basis-0 shrink-0 grow-[0.5]" aria-hidden />}
           {ri === rows.length - 1 && (
-            <Key label="⌫" onClick={() => onKey({ kind: 'delete' })} className="px-3" />
+            <Key
+              label="⌫"
+              onClick={() => onKey({ kind: 'delete' })}
+              className="grow-[1.5] basis-0"
+            />
           )}
           {row.map((l) => (
-            <Key key={l} label={l} state={keyStates[l]} onClick={() => onKey({ kind: 'letter', value: l })} />
+            <Key
+              key={l}
+              label={l}
+              state={keyStates[l]}
+              onClick={() => onKey({ kind: 'letter', value: l })}
+              className="basis-0 grow"
+            />
           ))}
           {ri === rows.length - 1 &&
             (enterMovesAway ? (
               <MovingEnterKey onEnter={() => onKey({ kind: 'enter' })} />
             ) : (
-              <Key label="Enter" onClick={() => onKey({ kind: 'enter' })} className="px-4" />
+              <Key
+                label="Enter"
+                onClick={() => onKey({ kind: 'enter' })}
+                className="grow-[1.5] basis-0 text-xs sm:text-sm"
+              />
             ))}
+          {ri === 1 && <span className="basis-0 shrink-0 grow-[0.5]" aria-hidden />}
         </div>
       ))}
     </div>
@@ -51,8 +68,9 @@ function MovingEnterKey({ onEnter }: { onEnter: () => void }) {
     if (relented) return;
     evasionsRef.current += 1;
     const isMobile = typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches;
-    const maxDx = isMobile ? 70 : 160;
-    const maxDy = isMobile ? 40 : 80;
+    // Cap dx so the button doesn't sling off a narrow iPhone viewport.
+    const maxDx = isMobile ? 40 : 140;
+    const maxDy = isMobile ? 36 : 80;
     const dx = (Math.random() * 2 - 1) * maxDx;
     const dy = (Math.random() * 2 - 1) * maxDy;
     setOffset({ x: dx, y: dy });
@@ -86,7 +104,7 @@ function MovingEnterKey({ onEnter }: { onEnter: () => void }) {
       }}
       style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
       className={cn(
-        'relative h-11 min-w-[36px] rounded-md border px-4 text-sm font-semibold transition active:scale-[0.98]',
+        'relative h-11 basis-0 grow-[1.5] rounded-md border px-1 text-xs font-semibold transition active:scale-[0.98] sm:text-sm',
         'focus:outline-none focus:ring-2 focus:ring-accent/60',
         'bg-keycap text-textPrimary border-white/40 shadow-[0_4px_12px_rgba(0,0,0,0.1)]',
         'duration-150 ease-out'
@@ -118,7 +136,7 @@ function Key({
   return (
     <button
       className={cn(
-        'h-11 min-w-[36px] rounded-md text-sm font-semibold active:scale-[0.98] transition border',
+        'h-11 min-w-0 rounded-md px-0 text-sm font-semibold uppercase transition active:scale-[0.98] border',
         'focus:outline-none focus:ring-2 focus:ring-accent/60',
         stateStyles[state],
         className

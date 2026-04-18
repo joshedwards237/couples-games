@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import { Check, Copy, Link as LinkIcon, Loader2, LogOut, Share2 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -199,7 +200,17 @@ export function CoupleCard() {
       <div className="flex items-center gap-4 text-sm">
         <MemberTile label="You" name={meName} avatarUrl={selfAvatar(user) ?? me?.avatarUrl ?? null} />
         <span className="text-textSecondary">·</span>
-        <MemberTile label="Partner" name={partnerName} avatarUrl={partner?.avatarUrl ?? null} />
+        {partner?.userId ? (
+          <RouterLink
+            to={`/users/${partner.userId}`}
+            className="-m-2 rounded-md p-2 transition-colors hover:bg-white/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+            aria-label={`View ${partnerName}'s profile`}
+          >
+            <MemberTile label="Partner" name={partnerName} avatarUrl={partner.avatarUrl ?? null} />
+          </RouterLink>
+        ) : (
+          <MemberTile label="Partner" name={partnerName} avatarUrl={partner?.avatarUrl ?? null} />
+        )}
       </div>
       <Button
         variant="ghost"

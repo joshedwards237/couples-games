@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Toaster } from '@/components/ui/toaster';
 import { Share2 } from 'lucide-react';
 import { Board } from '@/components/Board';
@@ -26,6 +25,7 @@ import type { LeaderboardEntry, MyAttempt, Puzzle } from '@/lib/types';
 import './styles/globals.css';
 import { Profile } from '@/pages/Profile';
 import { PrankDashboard } from '@/pages/PrankDashboard';
+import { UserProfile } from '@/pages/UserProfile';
 
 // Captured synchronously at module load — before any child useEffect runs.
 // Ordering matters: React fires useEffects child-first, so if this lived in
@@ -84,6 +84,14 @@ export default function App() {
               </AuthGate>
             }
           />
+          <Route
+            path="/users/:userId"
+            element={
+              <AuthGate>
+                <UserProfile />
+              </AuthGate>
+            }
+          />
         </Routes>
         <Toaster />
         <PwaUpdatePrompt />
@@ -106,23 +114,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function SignIn() {
-  const [email, setEmail] = useState('');
-  const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const sendMagic = async () => {
-    setError(null);
-    if (!email) return;
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` }
-    });
-    if (error) {
-      setError(error.message);
-      return;
-    }
-    setSent(true);
-  };
 
   const signInGoogle = async () => {
     setError(null);
@@ -146,24 +138,6 @@ function SignIn() {
           <Button onClick={signInGoogle} className="w-full">
             Continue with Google
           </Button>
-
-        <div className="flex items-center gap-2 text-xs text-textSecondary">
-          <div className="h-px flex-1 bg-white/60" />
-          or
-          <div className="h-px flex-1 bg-white/60" />
-        </div>
-
-        <div className="space-y-2">
-          <Input
-            type="email"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-          <Button onClick={sendMagic} disabled={!email} className="w-full">
-            {sent ? 'Link sent — check your email' : 'Send magic link'}
-          </Button>
-        </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
         </Card>
@@ -222,7 +196,7 @@ function Home() {
           </Button>
         </div>
 
-        <Leaderboard entries={leaderboard} loading={leaderboardLoading} />
+        <Leaderboard entries={leaderboard} loading={leaderboardLoading} puzzleId={puzzleId} />
 
         {shouldShow && <InstallPrompt onDismiss={dismiss} />}
       </section>

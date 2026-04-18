@@ -1,6 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { HeaderTrophyCount } from '@/components/HeaderTrophyCount';
 import { UserMenu } from '@/components/UserMenu';
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -23,7 +22,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 ← Back
               </Link>
             )}
-            <HeaderTrophyCount />
             <UserMenu />
           </div>
         </header>
