@@ -139,7 +139,19 @@ create table if not exists public.puzzle_attempts (
   created_at timestamptz not null default now()
 );
 
-alter table public.puzzle_attempts add column if not exists rows text[] not null default '{}';
+-- `rows` is jsonb (not text[]) to match the shape PostgREST sends from the
+-- client (`rows: string[]` serializes to a JSON array). Legacy installs that
+-- created this column as text[] are converted below.
+alter table public.puzzle_attempts add column if not exists rows jsonb not null default '[]'::jsonb;
+do $$ begin
+  if (select data_type from information_schema.columns
+      where table_schema='public' and table_name='puzzle_attempts' and column_name='rows') = 'ARRAY' then
+    alter table public.puzzle_attempts
+      alter column rows drop default,
+      alter column rows type jsonb using to_jsonb(rows),
+      alter column rows set default '[]'::jsonb;
+  end if;
+end$$;
 alter table public.puzzle_attempts add column if not exists guesses_used int not null default 0;
 alter table public.puzzle_attempts add column if not exists time_ms bigint not null default 0;
 alter table public.puzzle_attempts add column if not exists hints_used int not null default 0;
