@@ -5,6 +5,7 @@ import { WrongAnswerReveal } from '@/components/pranks/WrongAnswerReveal';
 import { usePranks } from '@/context/PrankContext';
 import { useAuth } from '@/context/AuthContext';
 import { useActiveSlowBurns } from '@/hooks/useActiveSlowBurns';
+import { isValidGuess } from '@/lib/dictionary';
 import { markFastWinThisSession, shouldFirePrank, PRANK_DEFS } from '@/lib/pranks';
 import { cn } from '@/lib/utils';
 
@@ -13,6 +14,10 @@ type KeyStateMap = Record<string, LetterEval>;
 
 interface BoardProps {
   answer: string;
+  /** In-progress rows restored from a previous session. Each entry is an uppercase guess. */
+  initialRows?: string[];
+  /** Fires after every non-final submit so the caller can persist progress. */
+  onProgress?: (rows: string[]) => void;
   onComplete?: (result: { win: boolean; rows: string[] }) => void;
 }
 
@@ -57,19 +62,45 @@ const LOOKALIKE_SWAP: Record<string, string> = {
   N: 'M'
 };
 
-export function Board({ answer, onComplete }: BoardProps) {
+export function Board({ answer, initialRows, onProgress, onComplete }: BoardProps) {
   const targetLength = answer.length;
   const maxGuesses = 6;
-  const [guesses, setGuesses] = useState<string[]>([]);
-  const [evaluations, setEvaluations] = useState<LetterEval[][]>([]);
+
+  // Seed state from persisted progress (if any) so a refreshed / returning
+  // session restores guesses, tile evaluations, and keyboard colors.
+  const seeded = useMemo(() => {
+    const rows = (initialRows ?? []).slice(0, maxGuesses).map((r) => (r ?? '').toUpperCase());
+    const evals = rows.map((r) => evaluate(r, answer));
+    const keys: KeyStateMap = {};
+    rows.forEach((g, i) => {
+      const ev = evals[i];
+      const priority: Record<LetterEval, number> = { correct: 3, present: 2, absent: 1, unknown: 0 };
+      g.split('').forEach((letter, idx) => {
+        const state = ev[idx];
+        const existing = keys[letter];
+        if (!existing || priority[state] > priority[existing]) keys[letter] = state;
+      });
+    });
+    return { rows, evals, keys };
+    // Seed only once on mount — initialRows is fetched before Board is
+    // rendered and the board owns the authoritative state afterwards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const [guesses, setGuesses] = useState<string[]>(seeded.rows);
+  const [evaluations, setEvaluations] = useState<LetterEval[][]>(seeded.evals);
   const [current, setCurrent] = useState('');
-  const [keyStates, setKeyStates] = useState<KeyStateMap>({});
+  const [keyStates, setKeyStates] = useState<KeyStateMap>(seeded.keys);
   const [revealRow, setRevealRow] = useState<number | null>(null);
   const [revealedCols, setRevealedCols] = useState(0);
   const [wrongAnswerOpen, setWrongAnswerOpen] = useState(false);
   const [tilesFalling, setTilesFalling] = useState(false);
   const [rewriteWord, setRewriteWord] = useState<string | null>(null);
   const [spellMessage, setSpellMessage] = useState<string | null>(null);
+  // Monotonic tick so each rejection re-fires the shake animation even
+  // when the user re-submits the same invalid word twice in a row.
+  const [rejectTick, setRejectTick] = useState(0);
+  const [rejectMsg, setRejectMsg] = useState<string | null>(null);
 
   const { user } = useAuth();
   const { config, isAdmin } = usePranks();
@@ -155,6 +186,16 @@ export function Board({ answer, onComplete }: BoardProps) {
     if (current.length !== targetLength) return;
     if (guesses.length >= maxGuesses) return;
 
+    // Dictionary validation. Skipped while `autocorrect_sabotage` is
+    // active so the prank's silent letter-swap doesn't out itself by
+    // rejecting the user's typed word.
+    if (!autocorrectActive && !isValidGuess(current, answer)) {
+      setRejectMsg('Not in word list');
+      setRejectTick((n) => n + 1);
+      window.setTimeout(() => setRejectMsg(null), 1200);
+      return;
+    }
+
     const guess = current;
     const evalRow = evaluate(guess, answer);
     const newGuesses = [...guesses, guess];
@@ -234,6 +275,9 @@ export function Board({ answer, onComplete }: BoardProps) {
       }
     } else if (newGuesses.length === maxGuesses) {
       onComplete?.({ win: false, rows: newGuesses });
+    } else {
+      // Mid-game guess. Persist progress so a refresh/reopen restores.
+      onProgress?.(newGuesses);
     }
   };
 
@@ -255,12 +299,14 @@ export function Board({ answer, onComplete }: BoardProps) {
           const evalRow =
             evaluations[rowIdx] ?? Array.from({ length: targetLength }, () => (isActiveRow ? 'unknown' : 'absent'));
           const isRevealing = revealRow === rowIdx;
+          const shakeKey = isActiveRow && rejectTick > 0 ? `reject-${rejectTick}` : undefined;
           return (
             <div
-              key={rowIdx}
+              key={shakeKey ?? rowIdx}
               className={cn(
-                'flex w-full gap-1.5 rounded-md px-1 py-1 transition-colors sm:gap-2 sm:px-2',
-                isActiveRow ? 'bg-surface/70' : 'bg-white/30'
+                'flex w-full justify-center gap-1.5 rounded-md px-1 py-1 transition-colors sm:gap-2 sm:px-2',
+                isActiveRow ? 'bg-surface/70' : 'bg-white/30',
+                isActiveRow && rejectTick > 0 && 'animate-shake'
               )}
             >
               {Array.from({ length: targetLength }).map((__, col) => {
@@ -283,7 +329,19 @@ export function Board({ answer, onComplete }: BoardProps) {
         })}
       </div>
 
-      <Keyboard onKey={handleKey} keyStates={keyStates} enterMovesAway={enterMovesAway} />
+      {rejectMsg && (
+        <p
+          role="status"
+          aria-live="polite"
+          className="text-center text-sm font-semibold text-red-600"
+        >
+          {rejectMsg}
+        </p>
+      )}
+
+      {!finished && (
+        <Keyboard onKey={handleKey} keyStates={keyStates} enterMovesAway={enterMovesAway} />
+      )}
 
       <WrongAnswerReveal
         open={wrongAnswerOpen}
