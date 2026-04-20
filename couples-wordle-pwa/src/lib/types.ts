@@ -1,4 +1,4 @@
-export type GameLane = 'classic' | 'couple';
+export type GameLane = 'classic' | 'couple' | 'bonus';
 export type GameMode = 'coop' | 'versus';
 export type LetterEval = 'correct' | 'present' | 'absent' | 'unknown';
 

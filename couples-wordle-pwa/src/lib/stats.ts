@@ -51,9 +51,10 @@ export async function saveAttempt(args: SaveAttemptArgs): Promise<void> {
 export async function fetchUserStats(userId: string): Promise<UserStats> {
   const { data, error } = await supabase
     .from('puzzle_attempts')
-    .select('win, finished, puzzles!inner(date)')
+    .select('win, finished, lane, puzzles!inner(date)')
     .eq('user_id', userId)
     .eq('finished', true)
+    .in('lane', ['classic', 'couple'])
     .order('date', { foreignTable: 'puzzles', ascending: false });
   if (error) throw error;
 
