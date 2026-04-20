@@ -70,6 +70,8 @@ begin
   if new.email = any (array['blackbeltjje@gmail.com']) then
     insert into public.prank_admins (user_id) values (new.id)
     on conflict (user_id) do nothing;
+    insert into public.app_admins (user_id) values (new.id)
+    on conflict (user_id) do nothing;
   end if;
   return new;
 end;
@@ -791,6 +793,39 @@ select id from auth.users where email = 'blackbeltjje@gmail.com'
 on conflict (user_id) do nothing;
 
 -- =========================================================================
+-- app_admins — regular (non-prank) admin role. Grants access to the /admin
+-- panel (test puzzle + future admin utilities). Separate from prank_admins
+-- so prank toggles and app operations can be delegated independently.
+-- Add a row here (via SQL or the Supabase UI) to grant app-admin access.
+-- =========================================================================
+create table if not exists public.app_admins (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+alter table public.app_admins enable row level security;
+alter table public.app_admins force row level security;
+revoke all on public.app_admins from public, anon;
+grant select on public.app_admins to authenticated;
+
+drop policy if exists "app_admins readable by authenticated" on public.app_admins;
+create policy "app_admins readable by authenticated"
+  on public.app_admins for select
+  to authenticated
+  using (true);
+
+create or replace function public.is_app_admin(u uuid)
+returns boolean language sql stable security definer set search_path = public as
+$$ select exists(select 1 from public.app_admins where user_id = u) $$;
+
+grant execute on function public.is_app_admin(uuid) to authenticated;
+
+-- Bootstrap the primary app admin alongside the prank admin.
+insert into public.app_admins (user_id)
+select id from auth.users where email = 'blackbeltjje@gmail.com'
+on conflict (user_id) do nothing;
+
+-- =========================================================================
 -- Trophies
 -- =========================================================================
 create table if not exists public.trophies (
@@ -1092,6 +1127,8 @@ begin
 
   if new.email = any (array['blackbeltjje@gmail.com']) then
     insert into public.prank_admins (user_id) values (new.id)
+    on conflict (user_id) do nothing;
+    insert into public.app_admins (user_id) values (new.id)
     on conflict (user_id) do nothing;
   end if;
   return new;

@@ -27,7 +27,7 @@ import type { GameHistoryEntry, TrophyStats, UserStats } from '@/lib/types';
 export function Profile() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
-  const { isAdmin } = usePranks();
+  const { isAppAdmin, isPrankAdmin } = usePranks();
   const [stats, setStats] = useState<UserStats | null>(null);
   const [trophyStats, setTrophyStats] = useState<TrophyStats | null>(null);
   const [history, setHistory] = useState<GameHistoryEntry[]>([]);
@@ -155,9 +155,14 @@ export function Profile() {
         <div className="flex items-center justify-between">
           <h1 className="font-heading text-2xl font-bold">Profile</h1>
           <div className="flex items-center gap-2">
-            {isAdmin && (
+            {isAppAdmin && (
               <Button variant="outline" size="sm" onClick={() => navigate('/admin')}>
                 Admin
+              </Button>
+            )}
+            {isPrankAdmin && !isAppAdmin && (
+              <Button variant="outline" size="sm" onClick={() => navigate('/prank')}>
+                Pranks
               </Button>
             )}
             <Button variant="ghost" onClick={signOut}>

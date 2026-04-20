@@ -29,12 +29,15 @@ export function loadTestPuzzle(): TestPuzzleState | null {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as TestPuzzleState;
-    if (!parsed?.word) return null;
-    return {
-      word: parsed.word.toUpperCase(),
-      rows: Array.isArray(parsed.rows) ? parsed.rows.map((r) => String(r).toUpperCase()) : [],
-      finished: !!parsed.finished
-    };
+    if (!parsed?.word || typeof parsed.word !== 'string') return null;
+    const word = parsed.word.toUpperCase();
+    if (!/^[A-Z]+$/.test(word)) return null;
+    const rawRows = Array.isArray(parsed.rows) ? parsed.rows : [];
+    const rows = rawRows
+      .filter((r): r is string => typeof r === 'string')
+      .map((r) => r.toUpperCase())
+      .filter((r) => r.length === word.length && /^[A-Z]+$/.test(r));
+    return { word, rows, finished: !!parsed.finished };
   } catch {
     return null;
   }
