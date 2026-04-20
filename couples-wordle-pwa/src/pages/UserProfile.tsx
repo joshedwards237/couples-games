@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { Trophy } from 'lucide-react';
+import { Check, Trophy, X } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/Layout';
@@ -126,8 +126,7 @@ export function UserProfile() {
         <StreakCard
           currentStreak={stats?.currentStreak ?? null}
           maxStreak={stats?.maxStreak ?? null}
-          totalWins={stats?.totalWins ?? null}
-          trophyCount={trophyStats?.total ?? null}
+          totalSolves={stats?.totalSolves ?? null}
         />
 
         <TrophyShelf userId={userId} />
@@ -150,13 +149,10 @@ export function UserProfile() {
                         <span className="text-textSecondary font-normal">· {h.date}</span>
                       </p>
                       <p className="text-xs text-textSecondary">
-                        {h.win ? `${h.guessesUsed}/6 guesses` : 'Did not solve'} · {formatTime(h.timeMs)}
+                        {h.outcome === 'missed' ? 'Did not solve' : `${h.guessesUsed}/6 guesses`} · {formatTime(h.timeMs)}
                       </p>
                     </div>
-                    <span className={h.win ? 'flex items-center gap-1 text-success font-semibold' : 'text-textSecondary'}>
-                      {h.win && <Trophy className="h-3.5 w-3.5" />}
-                      {h.win ? 'Win' : 'Loss'}
-                    </span>
+                    <OutcomeBadge outcome={h.outcome} />
                   </li>
                 ))}
               </ul>
@@ -165,6 +161,35 @@ export function UserProfile() {
         </Card>
       </div>
     </Layout>
+  );
+}
+
+function OutcomeBadge({ outcome }: { outcome: 'h2h_win' | 'solved' | 'missed' }) {
+  if (outcome === 'h2h_win') {
+    return (
+      <span className="flex items-center gap-1 text-success font-semibold">
+        <Trophy className="h-3.5 w-3.5" />
+        Win
+      </span>
+    );
+  }
+  if (outcome === 'solved') {
+    return (
+      <span className="flex items-center gap-1.5 text-textSecondary">
+        <span className="grid h-5 w-5 place-items-center rounded-full bg-success/20 text-success">
+          <Check className="h-3 w-3" strokeWidth={3} />
+        </span>
+        Solved
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5 text-textSecondary">
+      <span className="grid h-5 w-5 place-items-center rounded-full bg-black/10 text-textSecondary">
+        <X className="h-3 w-3" strokeWidth={3} />
+      </span>
+      Missed
+    </span>
   );
 }
 

@@ -1,4 +1,4 @@
-export type GameLane = 'classic' | 'couple' | 'bonus';
+export type GameLane = 'classic' | 'bonus';
 export type GameMode = 'coop' | 'versus';
 export type LetterEval = 'correct' | 'present' | 'absent' | 'unknown';
 
@@ -17,6 +17,14 @@ export interface Attempt {
   timestamp: string;
 }
 
+/**
+ * Three-state outcome shown on profile "Recent games" rows:
+ *   - 'h2h_win'  → solved AND beat linked partner (fewer guesses, time tiebreak)
+ *   - 'solved'   → solved but lost H2H, tied, or no partner
+ *   - 'missed'   → didn't solve within 6 guesses
+ */
+export type GameOutcome = 'h2h_win' | 'solved' | 'missed';
+
 export interface GameHistoryEntry {
   id: string;
   date: string;
@@ -25,6 +33,7 @@ export interface GameHistoryEntry {
   timeMs: number;
   hintsUsed: number;
   win: boolean;
+  outcome: GameOutcome;
   createdAt: string;
 }
 
@@ -37,10 +46,20 @@ export interface MyAttempt {
 }
 
 export interface UserStats {
+  /** Consecutive days ending today (or yesterday if today's classic isn't
+   * played yet) where the user won the classic puzzle. A missed day or a
+   * classic loss breaks the streak. */
   currentStreak: number;
+  /** Historical longest classic-win streak the user has ever held. */
   maxStreak: number;
+  /** H2H wins the user holds (classic lane). Preserved for callers that
+   * want a "Wins" count; the Profile card surfaces totalSolves instead. */
   totalWins: number;
+  /** Classic finishes (won or lost). */
   totalPlayed: number;
+  /** Classic + bonus solves regardless of H2H outcome. This is what the
+   * Profile card shows as "Total solves". */
+  totalSolves: number;
 }
 
 export interface LeaderboardEntry {

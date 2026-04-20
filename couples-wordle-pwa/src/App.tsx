@@ -259,11 +259,7 @@ interface PlayResult {
 function Play() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const lane: 'classic' | 'couple' | 'bonus' = pathname.endsWith('bonus')
-    ? 'bonus'
-    : pathname.endsWith('couple')
-      ? 'couple'
-      : 'classic';
+  const lane: 'classic' | 'bonus' = pathname.endsWith('bonus') ? 'bonus' : 'classic';
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
   const [existingAttempt, setExistingAttempt] = useState<MyAttempt | null>(null);
   const [inProgress, setInProgress] = useState<MyAttempt | null>(null);

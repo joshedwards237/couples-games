@@ -49,64 +49,67 @@ export async function saveAttempt(args: SaveAttemptArgs): Promise<void> {
 }
 
 export async function fetchUserStats(userId: string): Promise<UserStats> {
+  // Fetch classic + bonus finished attempts. Streaks + totalPlayed/totalWins
+  // come from classic only; totalSolves spans classic + bonus.
   const { data, error } = await supabase
     .from('puzzle_attempts')
     .select('win, finished, lane, puzzles!inner(date)')
     .eq('user_id', userId)
     .eq('finished', true)
-    .in('lane', ['classic', 'couple'])
-    .order('date', { foreignTable: 'puzzles', ascending: false });
+    .in('lane', ['classic', 'bonus']);
   if (error) throw error;
 
-  const rows = (data ?? []) as Array<{ win: boolean; finished: boolean; puzzles: { date: string } | { date: string }[] }>;
-  const normalized = rows
+  const all = ((data ?? []) as any[])
     .map((r) => ({
-      win: r.win,
-      date: Array.isArray(r.puzzles) ? r.puzzles[0]?.date : r.puzzles?.date
+      win: r.win as boolean,
+      lane: r.lane as 'classic' | 'bonus',
+      date: (Array.isArray(r.puzzles) ? r.puzzles[0]?.date : r.puzzles?.date) as string
     }))
-    .filter((r): r is { win: boolean; date: string } => Boolean(r.date))
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
+    .filter((r) => Boolean(r.date));
 
-  const totalPlayed = normalized.length;
-  const totalWins = normalized.filter((r) => r.win).length;
+  const classic = all.filter((r) => r.lane === 'classic');
+  const totalPlayed = classic.length;
+  const totalWins = classic.filter((r) => r.win).length;
+  const totalSolves = all.filter((r) => r.win).length; // classic + bonus wins
+
+  // Map date → did the user win the classic puzzle that day. One attempt
+  // per user per puzzle_id (UNIQUE), one classic puzzle per date, so safe.
+  const classicByDate = new Map<string, boolean>();
+  for (const r of classic) classicByDate.set(r.date, r.win);
 
   const todayUtc = new Date().toISOString().slice(0, 10);
   let currentStreak = 0;
-  let cursor = todayUtc;
-  for (const row of normalized) {
-    if (!row.win) break;
-    if (row.date === cursor) {
-      currentStreak += 1;
-      cursor = shiftDate(cursor, -1);
-    } else if (row.date === shiftDate(cursor, -1) && cursor === todayUtc) {
-      // allow the streak to include yesterday if today isn't played yet
-      currentStreak += 1;
-      cursor = shiftDate(row.date, -1);
-    } else {
-      break;
-    }
+  // If today's classic is played, start walking from today; otherwise
+  // start from yesterday so a not-yet-played-today doesn't mask the
+  // user's ongoing streak. A classic LOSS today zeroes it out.
+  let cursor: string | null;
+  if (classicByDate.has(todayUtc)) {
+    cursor = classicByDate.get(todayUtc) === true ? todayUtc : null;
+  } else {
+    cursor = shiftDate(todayUtc, -1);
+  }
+  while (cursor && classicByDate.get(cursor) === true) {
+    currentStreak += 1;
+    cursor = shiftDate(cursor, -1);
   }
 
+  // Max streak: walk classic attempts ascending, reset on missed day or loss.
   let maxStreak = 0;
   let running = 0;
   let prev: string | null = null;
-  const ascending = [...normalized].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const ascending = [...classic].sort((a, b) => (a.date < b.date ? -1 : 1));
   for (const row of ascending) {
     if (!row.win) {
       running = 0;
       prev = row.date;
       continue;
     }
-    if (prev && shiftDate(prev, 1) === row.date) {
-      running += 1;
-    } else {
-      running = 1;
-    }
+    running = prev && shiftDate(prev, 1) === row.date ? running + 1 : 1;
     if (running > maxStreak) maxStreak = running;
     prev = row.date;
   }
 
-  return { currentStreak, maxStreak, totalWins, totalPlayed };
+  return { currentStreak, maxStreak, totalWins, totalPlayed, totalSolves };
 }
 
 export async function fetchMyAttempt(userId: string, puzzleId: string): Promise<MyAttempt | null> {
@@ -130,24 +133,96 @@ export async function fetchMyAttempt(userId: string, puzzleId: string): Promise<
 export async function fetchGameHistory(userId: string, limit = 30): Promise<GameHistoryEntry[]> {
   const { data, error } = await supabase
     .from('puzzle_attempts')
-    .select('id, guesses_used, time_ms, hints_used, win, created_at, puzzles!inner(date, word)')
+    .select('id, puzzle_id, guesses_used, time_ms, hints_used, win, created_at, puzzles!inner(date, word)')
     .eq('user_id', userId)
     .eq('finished', true)
     .order('created_at', { ascending: false })
     .limit(limit);
   if (error) throw error;
 
-  return ((data ?? []) as any[]).map((r) => {
+  const rows = (data ?? []) as any[];
+  if (rows.length === 0) return [];
+
+  // Fetch the linked partner's finished attempts for the same puzzles, so
+  // we can stamp each row with an h2h outcome. Two lookups keep it simple
+  // and avoid depending on a partner FK embedding that doesn't exist.
+  const puzzleIds = rows.map((r) => r.puzzle_id as string);
+  let partnerMap = new Map<
+    string,
+    { guessesUsed: number; timeMs: number; win: boolean; createdAt: string }
+  >();
+  try {
+    const { data: cm } = await supabase
+      .from('couple_members')
+      .select('couple_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const coupleId = (cm as any)?.couple_id as string | undefined;
+    if (coupleId) {
+      const { data: partnerRow } = await supabase
+        .from('couple_members')
+        .select('user_id')
+        .eq('couple_id', coupleId)
+        .neq('user_id', userId)
+        .maybeSingle();
+      const partnerId = (partnerRow as any)?.user_id as string | undefined;
+      if (partnerId) {
+        const { data: partnerAttempts } = await supabase
+          .from('puzzle_attempts')
+          .select('puzzle_id, guesses_used, time_ms, win, created_at')
+          .eq('user_id', partnerId)
+          .eq('finished', true)
+          .in('puzzle_id', puzzleIds);
+        for (const p of (partnerAttempts ?? []) as any[]) {
+          partnerMap.set(p.puzzle_id as string, {
+            guessesUsed: p.guesses_used as number,
+            timeMs: p.time_ms as number,
+            win: p.win as boolean,
+            createdAt: p.created_at as string
+          });
+        }
+      }
+    }
+  } catch (_e) {
+    // Partner lookup failing just means every row falls back to a
+    // solo-style outcome (solved / missed); never block history render.
+    partnerMap = new Map();
+  }
+
+  return rows.map((r) => {
     const puzzle = Array.isArray(r.puzzles) ? r.puzzles[0] : r.puzzles;
+    const selfWin = Boolean(r.win);
+    const selfGuesses = r.guesses_used as number;
+    const selfTime = (r.time_ms as number) ?? 0;
+    const selfCreatedAt = r.created_at as string;
+    const partner = partnerMap.get(r.puzzle_id as string);
+
+    let outcome: 'h2h_win' | 'solved' | 'missed';
+    if (!selfWin) {
+      outcome = 'missed';
+    } else if (partner && partner.win) {
+      // Head-to-head: fewer guesses → lower time_ms → earlier created_at.
+      // Mirrors the DB tiebreak in award_trophies_for_attempt.
+      if (selfGuesses < partner.guessesUsed) outcome = 'h2h_win';
+      else if (selfGuesses > partner.guessesUsed) outcome = 'solved';
+      else if (selfTime < partner.timeMs) outcome = 'h2h_win';
+      else if (selfTime > partner.timeMs) outcome = 'solved';
+      else if (selfCreatedAt < partner.createdAt) outcome = 'h2h_win';
+      else outcome = 'solved';
+    } else {
+      outcome = 'solved';
+    }
+
     return {
       id: r.id as string,
       date: puzzle?.date as string,
       word: puzzle?.word as string,
-      guessesUsed: r.guesses_used as number,
-      timeMs: r.time_ms as number,
+      guessesUsed: selfGuesses,
+      timeMs: selfTime,
       hintsUsed: r.hints_used as number,
-      win: r.win as boolean,
-      createdAt: r.created_at as string
+      win: selfWin,
+      outcome,
+      createdAt: selfCreatedAt
     } satisfies GameHistoryEntry;
   });
 }

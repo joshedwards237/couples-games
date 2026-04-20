@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Trophy } from 'lucide-react';
+import { Check, Trophy, X } from 'lucide-react';
 import { Layout } from '@/components/Layout';
 import { StreakCard } from '@/components/StreakCard';
 import { CoupleCard } from '@/components/CoupleCard';
@@ -215,8 +215,7 @@ export function Profile() {
         <StreakCard
           currentStreak={stats?.currentStreak ?? null}
           maxStreak={stats?.maxStreak ?? null}
-          totalWins={stats?.totalWins ?? null}
-          trophyCount={trophyStats?.total ?? null}
+          totalSolves={stats?.totalSolves ?? null}
         />
 
         {user && <TrophyShelf userId={user.id} />}
@@ -240,14 +239,11 @@ export function Profile() {
                         <span className="text-textSecondary font-normal">· {h.date}</span>
                       </p>
                       <p className="text-xs text-textSecondary">
-                        {h.win ? `${h.guessesUsed}/6 guesses` : 'Did not solve'} · {formatTime(h.timeMs)}
+                        {h.outcome === 'missed' ? 'Did not solve' : `${h.guessesUsed}/6 guesses`} · {formatTime(h.timeMs)}
                         {h.hintsUsed ? ` · ${h.hintsUsed} hint${h.hintsUsed === 1 ? '' : 's'}` : ''}
                       </p>
                     </div>
-                    <span className={h.win ? 'flex items-center gap-1 text-success font-semibold' : 'text-textSecondary'}>
-                      {h.win && <Trophy className="h-3.5 w-3.5" />}
-                      {h.win ? 'Win' : 'Loss'}
-                    </span>
+                    <OutcomeBadge outcome={h.outcome} />
                   </li>
                 ))}
               </ul>
@@ -411,6 +407,42 @@ function NotificationsCard(props: {
       )}
       {error && <p className="text-xs text-red-600">{error}</p>}
     </Card>
+  );
+}
+
+/**
+ * 3-state outcome chip used on Recent-games rows.
+ *   h2h_win → trophy icon + "Win" (beat linked partner)
+ *   solved  → checkmark in a shaded circle ("Solved"): solo solve or
+ *             couple-solve that lost/tied the head-to-head
+ *   missed  → X in a same-style circle ("Missed"): didn't solve
+ */
+function OutcomeBadge({ outcome }: { outcome: 'h2h_win' | 'solved' | 'missed' }) {
+  if (outcome === 'h2h_win') {
+    return (
+      <span className="flex items-center gap-1 text-success font-semibold">
+        <Trophy className="h-3.5 w-3.5" />
+        Win
+      </span>
+    );
+  }
+  if (outcome === 'solved') {
+    return (
+      <span className="flex items-center gap-1.5 text-textSecondary">
+        <span className="grid h-5 w-5 place-items-center rounded-full bg-success/20 text-success">
+          <Check className="h-3 w-3" strokeWidth={3} />
+        </span>
+        Solved
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5 text-textSecondary">
+      <span className="grid h-5 w-5 place-items-center rounded-full bg-black/10 text-textSecondary">
+        <X className="h-3 w-3" strokeWidth={3} />
+      </span>
+      Missed
+    </span>
   );
 }
 
