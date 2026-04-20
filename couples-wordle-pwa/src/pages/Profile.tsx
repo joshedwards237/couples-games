@@ -156,8 +156,8 @@ export function Profile() {
           <h1 className="font-heading text-2xl font-bold">Profile</h1>
           <div className="flex items-center gap-2">
             {isAdmin && (
-              <Button variant="outline" size="sm" onClick={() => navigate('/prank')}>
-                Prank dashboard
+              <Button variant="outline" size="sm" onClick={() => navigate('/admin')}>
+                Admin
               </Button>
             )}
             <Button variant="ghost" onClick={signOut}>

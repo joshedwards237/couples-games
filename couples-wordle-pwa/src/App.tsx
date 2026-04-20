@@ -26,6 +26,7 @@ import type { LeaderboardEntry, MonthlyLeaderboardEntry, MyAttempt, Puzzle } fro
 import './styles/globals.css';
 import { Profile } from '@/pages/Profile';
 import { PrankDashboard } from '@/pages/PrankDashboard';
+import { AdminPanel } from '@/pages/AdminPanel';
 import { UserProfile } from '@/pages/UserProfile';
 
 // Captured synchronously at module load — before any child useEffect runs.
@@ -82,6 +83,14 @@ export default function App() {
             element={
               <AuthGate>
                 <PrankDashboard />
+              </AuthGate>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AuthGate>
+                <AdminPanel />
               </AuthGate>
             }
           />
