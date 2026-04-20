@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Delete } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export type KeyType =
@@ -24,13 +25,16 @@ export function Keyboard({ onKey, keyStates = {}, enterMovesAway = false }: Keyb
         <div key={ri} className="flex w-full gap-1 sm:gap-1.5">
           {/* Middle row: half-key spacers so letters align under row 1 */}
           {ri === 1 && <span className="basis-0 shrink-0 grow-[0.5]" aria-hidden />}
-          {ri === rows.length - 1 && (
-            <Key
-              label="⌫"
-              onClick={() => onKey({ kind: 'delete' })}
-              className="grow-[1.5] basis-0"
-            />
-          )}
+          {ri === rows.length - 1 &&
+            (enterMovesAway ? (
+              <MovingEnterKey onEnter={() => onKey({ kind: 'enter' })} />
+            ) : (
+              <Key
+                label="Enter"
+                onClick={() => onKey({ kind: 'enter' })}
+                className="grow-[2] basis-0 text-sm sm:text-base"
+              />
+            ))}
           {row.map((l) => (
             <Key
               key={l}
@@ -40,16 +44,14 @@ export function Keyboard({ onKey, keyStates = {}, enterMovesAway = false }: Keyb
               className="basis-0 grow"
             />
           ))}
-          {ri === rows.length - 1 &&
-            (enterMovesAway ? (
-              <MovingEnterKey onEnter={() => onKey({ kind: 'enter' })} />
-            ) : (
-              <Key
-                label="Enter"
-                onClick={() => onKey({ kind: 'enter' })}
-                className="grow-[1.5] basis-0 text-xs sm:text-sm"
-              />
-            ))}
+          {ri === rows.length - 1 && (
+            <Key
+              label={<Delete className="h-6 w-6 sm:h-7 sm:w-7" aria-hidden />}
+              aria-label="Backspace"
+              onClick={() => onKey({ kind: 'delete' })}
+              className="grow-[1.5] basis-0"
+            />
+          )}
           {ri === 1 && <span className="basis-0 shrink-0 grow-[0.5]" aria-hidden />}
         </div>
       ))}
@@ -104,7 +106,7 @@ function MovingEnterKey({ onEnter }: { onEnter: () => void }) {
       }}
       style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
       className={cn(
-        'relative h-11 basis-0 grow-[1.5] rounded-md border px-1 text-xs font-semibold transition active:scale-[0.98] sm:text-sm',
+        'relative h-11 basis-0 grow-[2] rounded-md border px-1 text-sm font-semibold transition active:scale-[0.98] sm:text-base',
         'focus:outline-none focus:ring-2 focus:ring-accent/60',
         'bg-keycap text-textPrimary border-white/40 shadow-[0_4px_12px_rgba(0,0,0,0.1)]',
         'duration-150 ease-out'
@@ -122,7 +124,7 @@ function Key({
   state = 'unknown',
   ...props
 }: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children'> & {
-  label: string;
+  label: React.ReactNode;
   state?: 'correct' | 'present' | 'absent' | 'unknown';
 }) {
   const stateStyles: Record<typeof state, string> = {
@@ -137,6 +139,7 @@ function Key({
     <button
       className={cn(
         'h-11 min-w-0 rounded-md px-0 text-sm font-semibold uppercase transition active:scale-[0.98] border',
+        'inline-flex items-center justify-center',
         'focus:outline-none focus:ring-2 focus:ring-accent/60',
         stateStyles[state],
         className

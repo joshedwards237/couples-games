@@ -69,6 +69,23 @@
   box-sizing: border-box;
 }
 
+/* Prevent any descendant from introducing horizontal scroll which would
+   make mx-auto containers appear visually off-center. */
+html, body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
+/* iOS safe-area: symmetric horizontal padding equal to
+   max(1rem, env(safe-area-inset-*)) so notched devices (Dynamic Island,
+   rounded display edges) don't visually offset content in home-screen
+   PWA mode. Applied to the Layout container only. */
+.app-container {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  width: 100%;
+}
+
 body {
   margin: 0;
   font-family: 'Atkinson Hyperlegible', system-ui, -apple-system, sans-serif;
@@ -93,6 +110,16 @@ button {
 .animate-flip {
   animation: flip 0.3s ease both;
   transform-style: preserve-3d;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-8px); }
+  40%, 80% { transform: translateX(8px); }
+}
+
+.animate-shake {
+  animation: shake 0.35s ease-in-out both;
 }
 
 @keyframes tile-fall {

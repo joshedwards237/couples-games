@@ -26,6 +26,7 @@ import type { LeaderboardEntry, MonthlyLeaderboardEntry, MyAttempt, Puzzle } fro
 import './styles/globals.css';
 import { Profile } from '@/pages/Profile';
 import { PrankDashboard } from '@/pages/PrankDashboard';
+import { AdminPanel } from '@/pages/AdminPanel';
 import { UserProfile } from '@/pages/UserProfile';
 
 // Captured synchronously at module load — before any child useEffect runs.
@@ -82,6 +83,14 @@ export default function App() {
             element={
               <AuthGate>
                 <PrankDashboard />
+              </AuthGate>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <AuthGate>
+                <AdminPanel />
               </AuthGate>
             }
           />
@@ -231,6 +240,7 @@ function Play() {
   const lane = pathname.endsWith('couple') ? 'couple' : 'classic';
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
   const [existingAttempt, setExistingAttempt] = useState<MyAttempt | null>(null);
+  const [inProgress, setInProgress] = useState<MyAttempt | null>(null);
   const [result, setResult] = useState<PlayResult | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -250,6 +260,11 @@ function Play() {
         if (cancelled) return;
         if (existing?.finished) {
           setExistingAttempt(existing);
+        } else if (existing && (existing.rows?.length ?? 0) > 0) {
+          // In-progress attempt exists — rehydrate the board and set the
+          // timer so cumulative elapsed picks up where we left off.
+          setInProgress(existing);
+          startedAtRef.current = Date.now() - (existing.timeMs || 0);
         } else {
           startedAtRef.current = Date.now();
         }
@@ -267,6 +282,28 @@ function Play() {
       cancelled = true;
     };
   }, [lane, user]);
+
+  const handleProgress = async (rows: string[]) => {
+    if (!puzzle || !user) return;
+    const timeMs = startedAtRef.current ? Date.now() - startedAtRef.current : 0;
+    try {
+      await saveAttempt({
+        userId: user.id,
+        puzzleId: puzzle.id,
+        rows,
+        timeMs,
+        hintsUsed: 0,
+        lane: lane as 'classic' | 'couple',
+        mode: 'coop',
+        win: false,
+        finished: false
+      });
+    } catch (e) {
+      // In-progress save failures are non-fatal: board state in memory is
+      // still authoritative, and the next guess will try to save again.
+      console.error('saveAttempt (progress) failed', e);
+    }
+  };
 
   const handleComplete = async ({ win, rows }: { win: boolean; rows: string[] }) => {
     if (!puzzle) return;
@@ -318,7 +355,12 @@ function Play() {
         ) : existingAttempt ? (
           <CompletedBoard answer={puzzle.word} rows={existingAttempt.rows} />
         ) : (
-          <Board answer={puzzle.word} onComplete={handleComplete} />
+          <Board
+            answer={puzzle.word}
+            initialRows={inProgress?.rows}
+            onProgress={handleProgress}
+            onComplete={handleComplete}
+          />
         )}
         {summary && (
           <Card className="flex flex-wrap items-center justify-between gap-3 bg-white/80 backdrop-blur">

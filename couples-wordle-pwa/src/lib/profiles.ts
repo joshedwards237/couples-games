@@ -5,7 +5,7 @@ import type { Profile } from './types';
 export async function getProfile(userId: string): Promise<Profile | null> {
   const { data, error } = await supabase
     .from('profiles')
-    .select('user_id, display_name, avatar_url')
+    .select('user_id, display_name, avatar_url, notifications_enabled')
     .eq('user_id', userId)
     .maybeSingle();
   if (error) throw error;
@@ -13,10 +13,20 @@ export async function getProfile(userId: string): Promise<Profile | null> {
   return toProfile(data);
 }
 
+export async function setNotificationsEnabled(userId: string, enabled: boolean): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .upsert(
+      { user_id: userId, notifications_enabled: enabled },
+      { onConflict: 'user_id' }
+    );
+  if (error) throw error;
+}
+
 export async function fetchAllProfiles(): Promise<Profile[]> {
   const { data, error } = await supabase
     .from('profiles')
-    .select('user_id, display_name, avatar_url')
+    .select('user_id, display_name, avatar_url, notifications_enabled')
     .order('display_name', { ascending: true });
   if (error) throw error;
   return ((data ?? []) as any[]).map(toProfile);
@@ -26,7 +36,7 @@ export async function upsertDisplayName(userId: string, displayName: string): Pr
   const { data, error } = await supabase
     .from('profiles')
     .upsert({ user_id: userId, display_name: displayName.trim() }, { onConflict: 'user_id' })
-    .select('user_id, display_name, avatar_url')
+    .select('user_id, display_name, avatar_url, notifications_enabled')
     .single();
   if (error) throw error;
   return toProfile(data);
@@ -69,7 +79,7 @@ export async function syncProfileFromAuth(user: User): Promise<Profile | null> {
   const { data, error } = await supabase
     .from('profiles')
     .upsert(patch, { onConflict: 'user_id' })
-    .select('user_id, display_name, avatar_url')
+    .select('user_id, display_name, avatar_url, notifications_enabled')
     .single();
   if (error) {
     console.error('syncProfileFromAuth failed', error);
@@ -82,6 +92,7 @@ function toProfile(row: any): Profile {
   return {
     userId: row.user_id as string,
     displayName: (row.display_name as string) ?? '',
-    avatarUrl: (row.avatar_url as string | null) ?? null
+    avatarUrl: (row.avatar_url as string | null) ?? null,
+    notificationsEnabled: row.notifications_enabled == null ? true : Boolean(row.notifications_enabled)
   };
 }
