@@ -73,14 +73,9 @@ export function MonthlyLeaderboard({ entries, loading }: Props) {
                   {entry.displayName || 'Player'}
                   {entry.isYou && <span className="ml-1 text-xs text-accent">(you)</span>}
                 </p>
-                <div className="shrink-0 text-right tabular-nums">
-                  <p className="text-sm font-semibold">
-                    {entry.wins} {entry.wins === 1 ? 'win' : 'wins'}
-                  </p>
-                  <p className="text-xs text-textSecondary">
-                    {entry.totalSolves} solved
-                  </p>
-                </div>
+                <span className="shrink-0 text-sm tabular-nums text-textSecondary">
+                  {entry.wins} {entry.wins === 1 ? 'win' : 'wins'}
+                </span>
               </button>
             </li>
           ))}
