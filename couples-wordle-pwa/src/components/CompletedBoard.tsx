@@ -37,7 +37,7 @@ export function CompletedBoard({ answer, rows }: Props) {
             : Array.from({ length: targetLength }, () => 'unknown');
           const letters = guess.toUpperCase().split('');
           return (
-            <div key={rowIdx} className="flex w-full gap-1.5 rounded-md bg-white/30 px-1 py-1 sm:gap-2 sm:px-2">
+            <div key={rowIdx} className="flex w-full justify-center gap-1.5 rounded-md bg-white/30 px-1 py-1 sm:gap-2 sm:px-2">
               {Array.from({ length: targetLength }).map((__, col) => {
                 const delay = rowIdx * ROW_OFFSET_MS + col * COL_STAGGER_MS;
                 return (
