@@ -60,6 +60,9 @@ export interface UserStats {
   /** Classic + bonus solves regardless of H2H outcome. This is what the
    * Profile card shows as "Total solves". */
   totalSolves: number;
+  /** Head-to-head wins against the user's partner. Counts rows with
+   * kind='win' in the trophies table (the 'win' trophy is H2H-only). */
+  h2hWins: number;
 }
 
 export interface LeaderboardEntry {

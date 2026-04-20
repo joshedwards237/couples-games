@@ -126,6 +126,7 @@ export function UserProfile() {
         <StreakCard
           currentStreak={stats?.currentStreak ?? null}
           maxStreak={stats?.maxStreak ?? null}
+          h2hWins={stats?.h2hWins ?? null}
           totalSolves={stats?.totalSolves ?? null}
         />
 

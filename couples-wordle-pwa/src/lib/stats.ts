@@ -109,7 +109,23 @@ export async function fetchUserStats(userId: string): Promise<UserStats> {
     prev = row.date;
   }
 
-  return { currentStreak, maxStreak, totalWins, totalPlayed, totalSolves };
+  // Head-to-head wins against the user's partner. The 'win' trophy kind
+  // is awarded exclusively inside the couple H2H block (see
+  // award_trophies_for_attempt), so counting those rows is the canonical
+  // source of truth for H2H wins.
+  let h2hWins = 0;
+  try {
+    const { count } = await supabase
+      .from('trophies')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('kind', 'win');
+    h2hWins = count ?? 0;
+  } catch (_e) {
+    h2hWins = 0;
+  }
+
+  return { currentStreak, maxStreak, totalWins, totalPlayed, totalSolves, h2hWins };
 }
 
 export async function fetchMyAttempt(userId: string, puzzleId: string): Promise<MyAttempt | null> {
