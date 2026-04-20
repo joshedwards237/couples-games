@@ -67,6 +67,7 @@ export interface Profile {
   userId: string;
   displayName: string;
   avatarUrl: string | null;
+  notificationsEnabled: boolean;
 }
 
 export interface Couple {

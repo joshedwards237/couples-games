@@ -12,7 +12,15 @@ import { TrophyShelf } from '@/components/TrophyShelf';
 import { useAuth } from '@/context/AuthContext';
 import { fetchGameHistory, fetchUserStats } from '@/lib/stats';
 import { fetchMyTrophyStats } from '@/lib/trophies';
-import { getProfile, upsertDisplayName } from '@/lib/profiles';
+import { getProfile, setNotificationsEnabled, upsertDisplayName } from '@/lib/profiles';
+import {
+  getExistingSubscription,
+  isIosStandalone,
+  isPushSupported,
+  pushPermission,
+  subscribeToPush,
+  unsubscribeFromPush
+} from '@/lib/push';
 import { usePranks } from '@/context/PrankContext';
 import type { GameHistoryEntry, TrophyStats, UserStats } from '@/lib/types';
 
@@ -27,6 +35,10 @@ export function Profile() {
   const [savingName, setSavingName] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notifPref, setNotifPref] = useState<boolean>(true);
+  const [notifBusy, setNotifBusy] = useState(false);
+  const [notifError, setNotifError] = useState<string | null>(null);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -57,7 +69,20 @@ export function Profile() {
             }
           }
         }
-        if (!cancelled) setDisplayName(effectiveName);
+        if (!cancelled) {
+          setDisplayName(effectiveName);
+          setNotifPref(profile?.notificationsEnabled ?? true);
+        }
+
+        // Reflect whether *this device* already has an active push
+        // subscription — separate from the DB-level notifications_enabled
+        // preference (which is account-wide).
+        try {
+          const sub = await getExistingSubscription();
+          if (!cancelled) setPushSubscribed(!!sub);
+        } catch (_err) {
+          /* noop — harmless */
+        }
 
         const [userStats, userHistory, userTrophyStats] = await Promise.all([
           fetchUserStats(user.id),
@@ -79,6 +104,36 @@ export function Profile() {
       cancelled = true;
     };
   }, [user]);
+
+  const handleToggleNotifications = async (next: boolean) => {
+    if (!user) return;
+    setNotifBusy(true);
+    setNotifError(null);
+    try {
+      if (next) {
+        if (!isPushSupported()) {
+          throw new Error('This browser does not support push notifications.');
+        }
+        if (!isIosStandalone()) {
+          throw new Error('On iPhone, add this app to your Home Screen first, then open it from that icon and try again.');
+        }
+        await subscribeToPush(user.id);
+        await setNotificationsEnabled(user.id, true);
+        setPushSubscribed(true);
+        setNotifPref(true);
+      } else {
+        await unsubscribeFromPush();
+        await setNotificationsEnabled(user.id, false);
+        setPushSubscribed(false);
+        setNotifPref(false);
+      }
+    } catch (e: any) {
+      console.error(e);
+      setNotifError(e?.message ?? 'Could not update notifications.');
+    } finally {
+      setNotifBusy(false);
+    }
+  };
 
   const saveName = async () => {
     if (!user) return;
@@ -140,6 +195,18 @@ export function Profile() {
           </p>
         </Card>
 
+        <NotificationsCard
+          enabled={notifPref && pushSubscribed}
+          busy={notifBusy}
+          error={notifError}
+          supported={isPushSupported()}
+          permission={pushPermission()}
+          iosOk={isIosStandalone()}
+          onToggle={handleToggleNotifications}
+        />
+
+        <UpdatesCard />
+
         <StreakCard
           currentStreak={stats?.currentStreak ?? null}
           maxStreak={stats?.maxStreak ?? null}
@@ -184,6 +251,161 @@ export function Profile() {
         </Card>
       </div>
     </Layout>
+  );
+}
+
+function UpdatesCard() {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  // Reload ONLY after the new SW takes over as controller. Without this,
+  // a synchronous reload after postMessage(SKIP_WAITING) races the
+  // activation and gets served by the old SW, re-showing stale content.
+  const activateAndReload = (waiting: ServiceWorker) => {
+    const onChange = () => {
+      navigator.serviceWorker.removeEventListener('controllerchange', onChange);
+      window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', onChange);
+    waiting.postMessage({ type: 'SKIP_WAITING' });
+    // Failsafe: if controllerchange doesn't fire within 3s, reload anyway.
+    window.setTimeout(() => {
+      navigator.serviceWorker.removeEventListener('controllerchange', onChange);
+      window.location.reload();
+    }, 3000);
+  };
+
+  const handleCheck = async () => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      if (!('serviceWorker' in navigator)) {
+        setStatus('Service workers aren\u2019t supported in this browser.');
+        return;
+      }
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) {
+        setStatus('No service worker registered yet — open this page directly (not from a deep link) and try again.');
+        return;
+      }
+
+      if (reg.waiting) {
+        activateAndReload(reg.waiting);
+        return;
+      }
+
+      const updateFound = new Promise<boolean>((resolve) => {
+        const timer = window.setTimeout(() => resolve(false), 5000);
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          if (!nw) {
+            window.clearTimeout(timer);
+            resolve(false);
+            return;
+          }
+          nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+              window.clearTimeout(timer);
+              resolve(true);
+            }
+          });
+        });
+      });
+
+      // `reg.update()` on Safari throws "TypeError: Load failed" when the
+      // SW script fetch has any hiccup (cellular reconnect, recent update,
+      // CORS-like weirdness). Swallow and continue — we still want the
+      // user's click to result in *some* refresh.
+      try {
+        await reg.update();
+      } catch (err) {
+        console.warn('reg.update() failed; falling back to plain reload', err);
+        window.location.reload();
+        return;
+      }
+
+      const hasUpdate = await updateFound;
+      const waiting = (reg as ServiceWorkerRegistration).waiting;
+      if (hasUpdate && waiting) {
+        activateAndReload(waiting);
+        return;
+      }
+      setStatus('You\u2019re up to date.');
+    } catch (err: any) {
+      console.error('check for updates failed', err);
+      // Never show raw "TypeError: Load failed" to the user — fall back
+      // to a plain reload and let them retry next time if needed.
+      window.location.reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="space-y-2 bg-white/80 backdrop-blur">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">App updates</p>
+          <p className="text-xs text-textSecondary">
+            Force-fetch the latest version if today&apos;s puzzle or leaderboard looks stale.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={handleCheck} disabled={busy}>
+          {busy ? 'Checking\u2026' : 'Check for updates'}
+        </Button>
+      </div>
+      {status && <p className="text-xs text-textSecondary">{status}</p>}
+    </Card>
+  );
+}
+
+function NotificationsCard(props: {
+  enabled: boolean;
+  busy: boolean;
+  error: string | null;
+  supported: boolean;
+  permission: NotificationPermission | 'unsupported';
+  iosOk: boolean;
+  onToggle: (next: boolean) => void | Promise<void>;
+}) {
+  const { enabled, busy, error, supported, permission, iosOk, onToggle } = props;
+  const denied = permission === 'denied';
+
+  return (
+    <Card className="space-y-2 bg-white/80 backdrop-blur">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">Daily reminder</p>
+          <p className="text-xs text-textSecondary">
+            Ping at 10:00 AM Mountain Time if you haven&apos;t played today.
+          </p>
+        </div>
+        <Button
+          variant={enabled ? 'outline' : 'default'}
+          size="sm"
+          onClick={() => onToggle(!enabled)}
+          disabled={busy || !supported || denied || (!enabled && !iosOk)}
+        >
+          {busy ? '…' : enabled ? 'On' : 'Turn on'}
+        </Button>
+      </div>
+      {!supported && (
+        <p className="text-xs text-textSecondary">
+          This browser doesn&apos;t support push notifications.
+        </p>
+      )}
+      {supported && !iosOk && (
+        <p className="text-xs text-textSecondary">
+          On iPhone, add this app to your Home Screen (Share → Add to Home Screen), then open it from the new icon.
+        </p>
+      )}
+      {denied && (
+        <p className="text-xs text-red-600">
+          Notifications are blocked. Enable them in your browser or device settings to receive reminders.
+        </p>
+      )}
+      {error && <p className="text-xs text-red-600">{error}</p>}
+    </Card>
   );
 }
 
