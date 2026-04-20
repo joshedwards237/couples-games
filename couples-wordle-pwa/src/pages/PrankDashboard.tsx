@@ -10,7 +10,7 @@ import type { Profile } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export function PrankDashboard() {
-  const { isAdmin, loading, error, config, updateConfig, addExemption, removeExemption } = usePranks();
+  const { isPrankAdmin, loading, error, config, updateConfig, addExemption, removeExemption } = usePranks();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(true);
   const [saveErr, setSaveErr] = useState<string | null>(null);
@@ -25,7 +25,7 @@ export function PrankDashboard() {
   );
 
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isPrankAdmin) return;
     let cancelled = false;
     (async () => {
       try {
@@ -40,9 +40,9 @@ export function PrankDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [isPrankAdmin]);
 
-  if (!loading && !isAdmin) return <Navigate to="/" replace />;
+  if (!loading && !isPrankAdmin) return <Navigate to="/" replace />;
 
   const handleChange = async (key: string, patch: Partial<PrankSettings>) => {
     setSaveErr(null);

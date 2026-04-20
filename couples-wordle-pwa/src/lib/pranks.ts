@@ -1,7 +1,5 @@
 import { supabase } from '@/lib/supabase';
 
-export const ADMIN_EMAILS = ['blackbeltjje@gmail.com'];
-
 export type PrankCategory = 'instant' | 'slow-burn' | 'narrative';
 
 export interface PrankDef {

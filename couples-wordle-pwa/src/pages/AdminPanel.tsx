@@ -6,10 +6,99 @@ import { Layout } from '@/components/Layout';
 import { Board } from '@/components/Board';
 import { usePranks } from '@/context/PrankContext';
 import { fetchPuzzle } from '@/lib/puzzles';
+import { supabase } from '@/lib/supabase';
 import { loadTestPuzzle, pickTestWord, saveTestPuzzle } from '@/lib/adminTestPuzzle';
 
+/**
+ * Card for firing an additional daily Wordle (a "bonus" puzzle) that
+ * every user can play alongside the regular daily. The generated word
+ * is intentionally hidden from the admin — the RPC returns only id +
+ * date so the admin plays the bonus blind like everyone else.
+ */
+function BonusWordleCard() {
+  const navigate = useNavigate();
+  const [status, setStatus] = useState<'loading' | 'none' | 'live'>('loading');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const checkStatus = async () => {
+    setStatus('loading');
+    try {
+      const p = await fetchPuzzle('bonus');
+      setStatus(p ? 'live' : 'none');
+    } catch {
+      setStatus('none');
+    }
+  };
+
+  useEffect(() => {
+    void checkStatus();
+  }, []);
+
+  const fire = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const { error } = await supabase.rpc('admin_create_bonus_puzzle');
+      if (error) {
+        // Self-heal: if a bonus somehow already exists, refresh status.
+        if (/already exists/i.test(error.message ?? '')) {
+          await checkStatus();
+          setMsg('A bonus is already live for today.');
+        } else if (/not authorized/i.test(error.message ?? '')) {
+          setMsg('You are not authorized to fire a bonus.');
+        } else {
+          setMsg(error.message ?? 'Could not fire bonus.');
+        }
+        return;
+      }
+      setStatus('live');
+      setMsg('Bonus fired — good luck 🎲');
+    } catch (e: any) {
+      setMsg(e?.message ?? 'Could not fire bonus.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="bg-white/80 backdrop-blur">
+      <CardHeader className="space-y-1">
+        <CardTitle className="text-base">Bonus Wordle</CardTitle>
+        <CardDescription>
+          Fire an extra daily Wordle for every user. The word is random and won&apos;t
+          be shown to you — you play it blind like everyone else.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-textSecondary">
+          Status:{' '}
+          {status === 'loading' ? (
+            'Checking…'
+          ) : status === 'live' ? (
+            <span className="font-semibold text-success">● Bonus is live</span>
+          ) : (
+            <span>● No bonus today</span>
+          )}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={fire} disabled={busy || status !== 'none'}>
+            {busy ? 'Firing…' : status === 'live' ? 'Already fired' : 'Fire bonus'}
+          </Button>
+          {status === 'live' && (
+            <Button size="sm" variant="outline" onClick={() => navigate('/play/bonus')}>
+              Play today&apos;s bonus
+            </Button>
+          )}
+        </div>
+        {msg && <p className="text-xs text-textSecondary">{msg}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AdminPanel() {
-  const { isAdmin, loading } = usePranks();
+  const { isAppAdmin, isPrankAdmin, loading } = usePranks();
   const navigate = useNavigate();
 
   const [todaysAnswer, setTodaysAnswer] = useState<string | null>(null);
@@ -21,7 +110,7 @@ export function AdminPanel() {
   // Load today's daily answer so the test pool can exclude it, then hydrate
   // any previously-saved test puzzle state from localStorage.
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAppAdmin) return;
     let cancelled = false;
     (async () => {
       let daily: string | null = null;
@@ -48,9 +137,18 @@ export function AdminPanel() {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [isAppAdmin]);
 
-  if (!loading && !isAdmin) return <Navigate to="/" replace />;
+  if (!loading && !isAppAdmin) return <Navigate to="/" replace />;
+  if (loading) {
+    return (
+      <Layout>
+        <Card className="bg-white/80 backdrop-blur">
+          <CardContent className="py-6 text-sm text-textSecondary">Loading…</CardContent>
+        </Card>
+      </Layout>
+    );
+  }
 
   const handleNewWord = () => {
     const w = pickTestWord(todaysAnswer ?? undefined, testWord ?? undefined);
@@ -95,17 +193,21 @@ export function AdminPanel() {
           </p>
         </div>
 
-        <Card className="bg-white/80 backdrop-blur">
-          <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
-            <div className="min-w-0 space-y-1">
-              <CardTitle className="text-base">Prank dashboard</CardTitle>
-              <CardDescription>Toggle pranks, tune probabilities, and exempt users.</CardDescription>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => navigate('/prank')}>
-              Open
-            </Button>
-          </CardHeader>
-        </Card>
+        {isPrankAdmin && (
+          <Card className="bg-white/80 backdrop-blur">
+            <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+              <div className="min-w-0 space-y-1">
+                <CardTitle className="text-base">Prank dashboard</CardTitle>
+                <CardDescription>Toggle pranks, tune probabilities, and exempt users.</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => navigate('/prank')}>
+                Open
+              </Button>
+            </CardHeader>
+          </Card>
+        )}
+
+        <BonusWordleCard />
 
         <Card className="bg-white/80 backdrop-blur">
           <CardHeader className="space-y-1">

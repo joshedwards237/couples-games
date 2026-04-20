@@ -166,6 +166,8 @@ function Home() {
   const [monthly, setMonthly] = useState<MonthlyLeaderboardEntry[]>([]);
   const [monthlyLoading, setMonthlyLoading] = useState(true);
   const [finishedToday, setFinishedToday] = useState(false);
+  const [bonusAvailable, setBonusAvailable] = useState(false);
+  const [bonusFinished, setBonusFinished] = useState(false);
 
   useCelebration(puzzleId);
 
@@ -176,19 +178,29 @@ function Home() {
     const load = async () => {
       try {
         const puzzle = await fetchPuzzle('classic');
-        const [board, myAttempt, monthlyRows] = await Promise.all([
+        const [board, myAttempt, monthlyRows, bonusPuzzle] = await Promise.all([
           fetchLeaderboard(puzzle.id, puzzle.word, user.id),
           fetchMyAttempt(user.id, puzzle.id),
           fetchMonthlyWinsLeaderboard(user.id).catch((e) => {
             console.error('monthly leaderboard failed', e);
             return [] as MonthlyLeaderboardEntry[];
-          })
+          }),
+          fetchPuzzle('bonus').catch(() => null)
         ]);
         if (cancelled) return;
         setPuzzleId(puzzle.id);
         setLeaderboard(board);
         setMonthly(monthlyRows);
         setFinishedToday(Boolean(myAttempt?.finished));
+
+        if (bonusPuzzle) {
+          setBonusAvailable(true);
+          const bonusAttempt = await fetchMyAttempt(user.id, bonusPuzzle.id);
+          if (!cancelled) setBonusFinished(Boolean(bonusAttempt?.finished));
+        } else {
+          setBonusAvailable(false);
+          setBonusFinished(false);
+        }
       } catch (e) {
         console.error('home load failed', e);
       } finally {
@@ -210,10 +222,20 @@ function Home() {
       <section className="space-y-6">
         <InviteBanner />
 
-        <div className="flex justify-center py-6">
+        <div className="flex flex-col items-center gap-3 py-6">
           <Button size="xl" onClick={() => navigate('/play/classic')} className="min-w-[220px]">
             {finishedToday ? 'View your attempt' : "Today's Wordle"}
           </Button>
+          {bonusAvailable && (
+            <Button
+              size="xl"
+              variant="outline"
+              onClick={() => navigate('/play/bonus')}
+              className="min-w-[220px]"
+            >
+              {bonusFinished ? 'View bonus attempt' : 'Bonus Wordle 🎲'}
+            </Button>
+          )}
         </div>
 
         <Leaderboard entries={leaderboard} loading={leaderboardLoading} puzzleId={puzzleId} />
@@ -237,7 +259,11 @@ interface PlayResult {
 function Play() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const lane = pathname.endsWith('couple') ? 'couple' : 'classic';
+  const lane: 'classic' | 'couple' | 'bonus' = pathname.endsWith('bonus')
+    ? 'bonus'
+    : pathname.endsWith('couple')
+      ? 'couple'
+      : 'classic';
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
   const [existingAttempt, setExistingAttempt] = useState<MyAttempt | null>(null);
   const [inProgress, setInProgress] = useState<MyAttempt | null>(null);
@@ -253,8 +279,14 @@ function Play() {
     let cancelled = false;
     const load = async () => {
       try {
-        const p = await fetchPuzzle(lane as 'classic' | 'couple');
+        const p = await fetchPuzzle(lane);
         if (cancelled) return;
+        if (!p) {
+          // Bonus lane with no bonus fired yet — the only lane that can
+          // return null. Surface a specific message instead of crashing.
+          setError('No bonus Wordle is live right now. Check back later.');
+          return;
+        }
         setPuzzle(p);
         const existing = user ? await fetchMyAttempt(user.id, p.id) : null;
         if (cancelled) return;
@@ -293,7 +325,7 @@ function Play() {
         rows,
         timeMs,
         hintsUsed: 0,
-        lane: lane as 'classic' | 'couple',
+        lane: lane,
         mode: 'coop',
         win: false,
         finished: false
@@ -320,7 +352,7 @@ function Play() {
         rows,
         timeMs,
         hintsUsed: 0,
-        lane: lane as 'classic' | 'couple',
+        lane: lane,
         mode: 'coop',
         win,
         finished: true
