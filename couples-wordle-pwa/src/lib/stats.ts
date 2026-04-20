@@ -338,9 +338,11 @@ function firstOfMonthDenver(): string {
 }
 
 /**
- * Monthly leaderboard: total classic wins per user since the first of the
- * current calendar month in Denver time. Ties use the same rank number
- * (computed in the UI). Classic-lane only.
+ * Monthly leaderboard. Primary metric: H2H wins on classic puzzles
+ * scoped to the current Denver calendar month — sourced from the
+ * trophies table (kind='win' is awarded exclusively to the H2H winner).
+ * Secondary metric: total solves (classic + bonus wins) this month,
+ * used as a tiebreaker and rendered alongside.
  */
 export async function fetchMonthlyWinsLeaderboard(
   currentUserId: string | null
@@ -349,23 +351,43 @@ export async function fetchMonthlyWinsLeaderboard(
   const monthStart = firstOfMonthDenver();
   const memberIds = await coupleMemberIds(currentUserId);
 
-  const { data, error } = await supabase
+  // Month-scoped H2H wins: join trophies → puzzles, filter kind='win'
+  // and the puzzle's lane='classic' + date >= monthStart.
+  const { data: winRows, error: winErr } = await supabase
+    .from('trophies')
+    .select('user_id, puzzles!inner(date, lane)')
+    .eq('kind', 'win')
+    .eq('puzzles.lane', 'classic')
+    .gte('puzzles.date', monthStart)
+    .in('user_id', memberIds);
+  if (winErr) throw winErr;
+
+  // Month-scoped solves (classic + bonus). We keep the same member-id
+  // filter so the leaderboard stays scoped to the couple.
+  const { data: solveRows, error: solveErr } = await supabase
     .from('puzzle_attempts')
     .select('user_id, puzzles!inner(date, lane)')
     .eq('finished', true)
     .eq('win', true)
-    .eq('puzzles.lane', 'classic')
+    .in('puzzles.lane', ['classic', 'bonus'])
     .gte('puzzles.date', monthStart)
     .in('user_id', memberIds);
-  if (error) throw error;
+  if (solveErr) throw solveErr;
 
-  const rows = (data ?? []) as Array<{ user_id: string }>;
-  if (rows.length === 0) return [];
+  const wins = new Map<string, number>();
+  for (const r of (winRows ?? []) as Array<{ user_id: string }>) {
+    wins.set(r.user_id, (wins.get(r.user_id) ?? 0) + 1);
+  }
+  const solves = new Map<string, number>();
+  for (const r of (solveRows ?? []) as Array<{ user_id: string }>) {
+    solves.set(r.user_id, (solves.get(r.user_id) ?? 0) + 1);
+  }
 
-  const counts = new Map<string, number>();
-  for (const r of rows) counts.set(r.user_id, (counts.get(r.user_id) ?? 0) + 1);
+  // Union of user_ids that appear in either metric, so a partner who
+  // solved but never won H2H still shows up (with 0 wins, N solves).
+  const userIds = Array.from(new Set([...wins.keys(), ...solves.keys()]));
+  if (userIds.length === 0) return [];
 
-  const userIds = Array.from(counts.keys());
   const { data: profiles, error: pErr } = await supabase
     .from('profiles')
     .select('user_id, display_name, avatar_url')
@@ -387,18 +409,22 @@ export async function fetchMonthlyWinsLeaderboard(
     });
   }
 
-  return Array.from(counts.entries())
-    .map(([userId, wins]) => {
+  return userIds
+    .map((userId) => {
       const pf = profileById.get(userId);
       return {
         userId,
         displayName: pf?.displayName || 'Player',
         avatarUrl: pf?.avatarUrl ?? null,
-        wins,
+        wins: wins.get(userId) ?? 0,
+        totalSolves: solves.get(userId) ?? 0,
         isYou: userId === currentUserId
       } satisfies MonthlyLeaderboardEntry;
     })
-    .sort((a, b) => b.wins - a.wins);
+    .sort((a, b) => {
+      if (b.wins !== a.wins) return b.wins - a.wins;
+      return b.totalSolves - a.totalSolves;
+    });
 }
 
 function shiftDate(date: string, days: number): string {

@@ -77,11 +77,20 @@ export interface LeaderboardEntry {
   isYou: boolean;
 }
 
+/**
+ * Monthly leaderboard entry. Keeps `wins` for backwards-compat (now
+ * representing H2H wins on classic puzzles in the current Denver month)
+ * and adds `totalSolves` so the UI can show "how many you beat partner on"
+ * vs "how many you solved".
+ */
 export interface MonthlyLeaderboardEntry {
   userId: string;
   displayName: string;
   avatarUrl: string | null;
+  /** H2H wins on classic puzzles scoped to this month (primary metric). */
   wins: number;
+  /** Classic + bonus solves this month, regardless of H2H outcome. */
+  totalSolves: number;
   isYou: boolean;
 }
 
