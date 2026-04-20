@@ -159,72 +159,45 @@ export async function fetchGameHistory(userId: string, limit = 30): Promise<Game
   const rows = (data ?? []) as any[];
   if (rows.length === 0) return [];
 
-  // Fetch the linked partner's finished attempts for the same puzzles, so
-  // we can stamp each row with an h2h outcome. Two lookups keep it simple
-  // and avoid depending on a partner FK embedding that doesn't exist.
   const puzzleIds = rows.map((r) => r.puzzle_id as string);
-  let partnerMap = new Map<
-    string,
-    { guessesUsed: number; timeMs: number; win: boolean; createdAt: string }
-  >();
-  try {
-    const { data: cm } = await supabase
-      .from('couple_members')
-      .select('couple_id')
-      .eq('user_id', userId)
-      .maybeSingle();
-    const coupleId = (cm as any)?.couple_id as string | undefined;
-    if (coupleId) {
-      const { data: partnerRow } = await supabase
-        .from('couple_members')
-        .select('user_id')
-        .eq('couple_id', coupleId)
-        .neq('user_id', userId)
-        .maybeSingle();
-      const partnerId = (partnerRow as any)?.user_id as string | undefined;
-      if (partnerId) {
-        const { data: partnerAttempts } = await supabase
-          .from('puzzle_attempts')
-          .select('puzzle_id, guesses_used, time_ms, win, created_at')
-          .eq('user_id', partnerId)
-          .eq('finished', true)
-          .in('puzzle_id', puzzleIds);
-        for (const p of (partnerAttempts ?? []) as any[]) {
-          partnerMap.set(p.puzzle_id as string, {
-            guessesUsed: p.guesses_used as number,
-            timeMs: p.time_ms as number,
-            win: p.win as boolean,
-            createdAt: p.created_at as string
-          });
-        }
-      }
-    }
-  } catch (_e) {
-    // Partner lookup failing just means every row falls back to a
-    // solo-style outcome (solved / missed); never block history render.
-    partnerMap = new Map();
-  }
 
+  // Source of truth for H2H outcome: the 'win' trophy (kind='win' is
+  // H2H-exclusive post-semantic-restore, and manual overrides live here).
+  // If a user has a 'win' trophy for a puzzle they solved, it's an h2h_win;
+  // otherwise it's 'solved'. This keeps the chip aligned with the trophy
+  // shelf and Profile Wins count.
+  let winTrophyPuzzleIds = new Set<string>();
+  try {
+    const { data: winTrophies } = await supabase
+      .from('trophies')
+      .select('puzzle_id')
+      .eq('user_id', userId)
+      .eq('kind', 'win')
+      .in('puzzle_id', puzzleIds);
+    winTrophyPuzzleIds = new Set(
+      ((winTrophies ?? []) as any[])
+        .map((t) => t.puzzle_id as string | null)
+        .filter((v): v is string => !!v)
+    );
+  } catch (_e) {
+    winTrophyPuzzleIds = new Set();
+  }
   return rows.map((r) => {
     const puzzle = Array.isArray(r.puzzles) ? r.puzzles[0] : r.puzzles;
     const selfWin = Boolean(r.win);
-    const selfGuesses = r.guesses_used as number;
-    const selfTime = (r.time_ms as number) ?? 0;
     const selfCreatedAt = r.created_at as string;
-    const partner = partnerMap.get(r.puzzle_id as string);
 
+    // Outcome rules:
+    //   - didn't solve → missed
+    //   - solved + has 'win' trophy for this puzzle → h2h_win
+    //   - solved + no trophy → solved
+    // The trophy table is authoritative so manual overrides (admin
+    // inserts/deletes) reflect immediately on the chip.
     let outcome: 'h2h_win' | 'solved' | 'missed';
     if (!selfWin) {
       outcome = 'missed';
-    } else if (partner && partner.win) {
-      // Head-to-head: fewer guesses → lower time_ms → earlier created_at.
-      // Mirrors the DB tiebreak in award_trophies_for_attempt.
-      if (selfGuesses < partner.guessesUsed) outcome = 'h2h_win';
-      else if (selfGuesses > partner.guessesUsed) outcome = 'solved';
-      else if (selfTime < partner.timeMs) outcome = 'h2h_win';
-      else if (selfTime > partner.timeMs) outcome = 'solved';
-      else if (selfCreatedAt < partner.createdAt) outcome = 'h2h_win';
-      else outcome = 'solved';
+    } else if (winTrophyPuzzleIds.has(r.puzzle_id as string)) {
+      outcome = 'h2h_win';
     } else {
       outcome = 'solved';
     }
@@ -233,8 +206,8 @@ export async function fetchGameHistory(userId: string, limit = 30): Promise<Game
       id: r.id as string,
       date: puzzle?.date as string,
       word: puzzle?.word as string,
-      guessesUsed: selfGuesses,
-      timeMs: selfTime,
+      guessesUsed: r.guesses_used as number,
+      timeMs: (r.time_ms as number) ?? 0,
       hintsUsed: r.hints_used as number,
       win: selfWin,
       outcome,
