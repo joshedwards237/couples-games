@@ -3079,3 +3079,166 @@ create policy "couple prank overrides writable by admin member"
   to authenticated
   using (public.is_prank_admin(auth.uid()) and public.is_member_of_couple(couple_id))
   with check (public.is_prank_admin(auth.uid()) and public.is_member_of_couple(couple_id));
+
+-- =========================================================================
+-- Prank admin roles: 'super' manages Global defaults + their own couple;
+-- 'couple' manages only their own couple's overrides. `is_prank_admin` is
+-- the umbrella helper (any role). Tightens prank_config / prank_exemptions
+-- writes to super only.
+-- =========================================================================
+alter table public.prank_admins
+  add column if not exists role text not null default 'couple'
+    check (role in ('super','couple'));
+
+update public.prank_admins
+set role = 'super'
+where user_id in (select id from auth.users where email = 'blackbeltjje@gmail.com')
+  and role <> 'super';
+
+create or replace function public.is_super_prank_admin(u uuid)
+returns boolean language sql stable security definer set search_path = public as
+$$ select exists(select 1 from public.prank_admins where user_id = u and role = 'super') $$;
+
+grant execute on function public.is_super_prank_admin(uuid) to authenticated;
+
+drop policy if exists "prank_config writable by admins" on public.prank_config;
+drop policy if exists "prank_config writable by super admins" on public.prank_config;
+create policy "prank_config writable by super admins"
+  on public.prank_config for all
+  to authenticated
+  using (public.is_super_prank_admin(auth.uid()))
+  with check (public.is_super_prank_admin(auth.uid()));
+
+drop policy if exists "prank_exemptions writable by admins" on public.prank_exemptions;
+drop policy if exists "prank_exemptions writable by super admins" on public.prank_exemptions;
+create policy "prank_exemptions writable by super admins"
+  on public.prank_exemptions for all
+  to authenticated
+  using (public.is_super_prank_admin(auth.uid()))
+  with check (public.is_super_prank_admin(auth.uid()));
+
+-- Update the new-user trigger so the primary admin always lands as 'super'.
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (user_id, display_name, avatar_url)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1), ''),
+    coalesce(
+      nullif(trim(new.raw_user_meta_data->>'avatar_url'), ''),
+      nullif(trim(new.raw_user_meta_data->>'picture'), '')
+    )
+  )
+  on conflict (user_id) do nothing;
+
+  if new.email = any (array['blackbeltjje@gmail.com']) then
+    insert into public.prank_admins (user_id, role) values (new.id, 'super')
+    on conflict (user_id) do update set role = 'super';
+    insert into public.app_admins (user_id) values (new.id)
+    on conflict (user_id) do nothing;
+  end if;
+  return new;
+end;
+$$;
+
+-- -------------------------------------------------------------------------
+-- Admin management RPCs (super-admin only). Roles enforced server-side.
+-- -------------------------------------------------------------------------
+create or replace function public.admin_set_prank_admin(
+  p_email text,
+  p_role  text
+) returns table (user_id uuid, role text, email text, display_name text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_target_id uuid;
+begin
+  if auth.uid() is null or not public.is_super_prank_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+  if p_role not in ('super','couple') then
+    raise exception 'invalid role: %', p_role;
+  end if;
+
+  select id into v_target_id from auth.users where lower(email) = lower(p_email) limit 1;
+  if v_target_id is null then
+    raise exception 'no user found for email: %', p_email;
+  end if;
+
+  insert into public.prank_admins (user_id, role)
+  values (v_target_id, p_role)
+  on conflict (user_id) do update set role = excluded.role;
+
+  return query
+  select pa.user_id, pa.role, u.email::text, coalesce(p.display_name, '')::text
+  from public.prank_admins pa
+  join auth.users u on u.id = pa.user_id
+  left join public.profiles p on p.user_id = pa.user_id
+  where pa.user_id = v_target_id;
+end;
+$$;
+
+revoke all on function public.admin_set_prank_admin(text, text) from public, anon;
+grant execute on function public.admin_set_prank_admin(text, text) to authenticated;
+
+create or replace function public.admin_remove_prank_admin(
+  p_user_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_target_role text;
+  v_super_count int;
+begin
+  if auth.uid() is null or not public.is_super_prank_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+
+  select role into v_target_role from public.prank_admins where user_id = p_user_id;
+  if v_target_role is null then
+    return; -- idempotent
+  end if;
+
+  if v_target_role = 'super' then
+    select count(*) into v_super_count from public.prank_admins where role = 'super';
+    if v_super_count <= 1 then
+      raise exception 'cannot remove the last super admin';
+    end if;
+  end if;
+
+  delete from public.prank_admins where user_id = p_user_id;
+end;
+$$;
+
+revoke all on function public.admin_remove_prank_admin(uuid) from public, anon;
+grant execute on function public.admin_remove_prank_admin(uuid) to authenticated;
+
+create or replace function public.admin_list_prank_admins()
+returns table (user_id uuid, email text, display_name text, role text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Any prank admin (super OR couple) can read the list so the dashboard
+  -- renders their own row. Write RPCs still gate on super.
+  if auth.uid() is null or not public.is_prank_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+
+  return query
+  select pa.user_id, u.email::text, coalesce(p.display_name, '')::text, pa.role
+  from public.prank_admins pa
+  join auth.users u on u.id = pa.user_id
+  left join public.profiles p on p.user_id = pa.user_id
+  order by case pa.role when 'super' then 0 else 1 end, lower(coalesce(p.display_name, u.email));
+end;
+$$;
+
+revoke all on function public.admin_list_prank_admins() from public, anon;
+grant execute on function public.admin_list_prank_admins() to authenticated;

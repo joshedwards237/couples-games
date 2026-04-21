@@ -7,6 +7,7 @@ import { Layout } from '@/components/Layout';
 import { usePranks } from '@/context/PrankContext';
 import { PRANK_DEFS, type PrankSettings, type PrankDef } from '@/lib/pranks';
 import { fetchAllProfiles } from '@/lib/profiles';
+import { supabase } from '@/lib/supabase';
 import type { Profile } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +22,7 @@ type Scope = 'global' | 'couple';
 export function PrankDashboard() {
   const {
     isPrankAdmin,
+    isSuperPrankAdmin,
     loading,
     error,
     globalConfig,
@@ -43,10 +45,13 @@ export function PrankDashboard() {
 
   // If coupleId lands after first render, flip to couple view.
   useEffect(() => {
-    if (coupleId && scope === 'global') setScope('couple');
-    if (!coupleId && scope === 'couple') setScope('global');
+    if (coupleId && scope === 'global' && !isSuperPrankAdmin) setScope('couple');
+    if (!coupleId && scope === 'couple' && isSuperPrankAdmin) setScope('global');
+    // Force couple admins (non-super) off the global tab if they somehow
+    // got there (e.g., demoted from super mid-session).
+    if (!isSuperPrankAdmin && scope === 'global') setScope(coupleId ? 'couple' : 'global');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coupleId]);
+  }, [coupleId, isSuperPrankAdmin]);
 
   const grouped = useMemo(
     () => ({
@@ -198,7 +203,9 @@ export function PrankDashboard() {
           </p>
         </div>
 
-        {coupleId && (
+        {isSuperPrankAdmin && <AdminsCard />}
+
+        {coupleId && isSuperPrankAdmin && (
           <div className="flex gap-1 rounded-md border border-brand-sage/30 bg-white/60 p-1 text-sm">
             <button
               type="button"
@@ -309,6 +316,238 @@ export function PrankDashboard() {
         </Section>
       </div>
     </Layout>
+  );
+}
+
+/**
+ * Super-admin-only card: lists every prank admin, lets super admins add
+ * another admin by email and remove existing ones. "Super" admins edit
+ * Global defaults + any couple they belong to; "Couple" admins edit
+ * only their own couple's overrides. Backend enforces both via
+ * is_super_prank_admin / is_prank_admin helpers.
+ */
+function AdminsCard() {
+  const { refresh } = usePranks();
+  const [rows, setRows] = useState<
+    Array<{ userId: string; email: string; displayName: string; role: 'super' | 'couple' }>
+  >([]);
+  const [loading, setLoading] = useState(true);
+  const [addEmail, setAddEmail] = useState('');
+  const [addRole, setAddRole] = useState<'super' | 'couple'>('couple');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Pull admins, then fan out for each user's email + display name.
+      const { data: adminRows, error: aErr } = await supabase
+        .from('prank_admins')
+        .select('user_id, role');
+      if (aErr) throw aErr;
+      const ids = (adminRows ?? []).map((r: any) => r.user_id as string);
+      if (ids.length === 0) {
+        setRows([]);
+        return;
+      }
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('user_id, display_name')
+        .in('user_id', ids);
+      const nameById = new Map<string, string>();
+      for (const p of (profiles ?? []) as Array<{ user_id: string; display_name: string | null }>) {
+        nameById.set(p.user_id, p.display_name ?? '');
+      }
+      // Email is only accessible via an RPC or the admin_set_prank_admin return
+      // payload. For the listing we piggy-back on a lightweight SECURITY
+      // DEFINER helper if it exists; otherwise we fall back to empty strings.
+      // Current load path: call admin_list_prank_admins() if available, else
+      // display without email.
+      let emailById = new Map<string, string>();
+      try {
+        const { data: listed } = await supabase.rpc('admin_list_prank_admins');
+        if (Array.isArray(listed)) {
+          for (const r of listed as Array<{ user_id: string; email: string }>) {
+            emailById.set(r.user_id, r.email ?? '');
+          }
+        }
+      } catch {
+        /* fallback to no emails */
+      }
+
+      const shaped = (adminRows ?? []).map((r: any) => ({
+        userId: r.user_id as string,
+        email: emailById.get(r.user_id) ?? '',
+        displayName: nameById.get(r.user_id) ?? '',
+        role: ((r.role as string | null) ?? 'couple') as 'super' | 'couple'
+      }));
+      // Super admins first, then alphabetical.
+      shaped.sort((a, b) => {
+        if (a.role !== b.role) return a.role === 'super' ? -1 : 1;
+        return (a.displayName || a.email).localeCompare(b.displayName || b.email);
+      });
+      setRows(shaped);
+    } catch (e: any) {
+      console.error('load admins failed', e);
+      setMsg({ tone: 'err', text: e?.message ?? 'Failed to load admins' });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const superCount = rows.filter((r) => r.role === 'super').length;
+
+  const handleAdd = async () => {
+    const email = addEmail.trim();
+    if (!email) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const { error } = await supabase.rpc('admin_set_prank_admin', {
+        p_email: email,
+        p_role: addRole
+      });
+      if (error) throw error;
+      setAddEmail('');
+      setMsg({ tone: 'ok', text: `Added ${email} as ${addRole} admin` });
+      await load();
+      await refresh();
+    } catch (e: any) {
+      setMsg({ tone: 'err', text: e?.message ?? 'Add failed' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleChangeRole = async (email: string, role: 'super' | 'couple') => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const { error } = await supabase.rpc('admin_set_prank_admin', {
+        p_email: email,
+        p_role: role
+      });
+      if (error) throw error;
+      setMsg({ tone: 'ok', text: `Set ${email} to ${role} admin` });
+      await load();
+      await refresh();
+    } catch (e: any) {
+      setMsg({ tone: 'err', text: e?.message ?? 'Change failed' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRemove = async (userId: string, label: string) => {
+    if (!window.confirm(`Remove ${label} from prank admins?`)) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const { error } = await supabase.rpc('admin_remove_prank_admin', {
+        p_user_id: userId
+      });
+      if (error) throw error;
+      setMsg({ tone: 'ok', text: `Removed ${label}` });
+      await load();
+      await refresh();
+    } catch (e: any) {
+      setMsg({ tone: 'err', text: e?.message ?? 'Remove failed' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="space-y-4 bg-white/80 backdrop-blur">
+      <CardHeader className="space-y-1">
+        <CardTitle className="text-base">Prank admins</CardTitle>
+        <CardDescription>
+          Super admins manage Global defaults + their own couple. Couple admins only manage
+          their own couple. New adds default to Couple admin.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading ? (
+          <p className="text-sm text-textSecondary">Loading…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-textSecondary">No admins yet.</p>
+        ) : (
+          <ul className="divide-y divide-brand-sage/20">
+            {rows.map((r) => {
+              const isOnlySuper = r.role === 'super' && superCount <= 1;
+              const label = r.displayName || r.email || r.userId;
+              return (
+                <li key={r.userId} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold">{r.displayName || '(no name)'}</p>
+                    {r.email && <p className="truncate text-xs text-textSecondary">{r.email}</p>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={r.role}
+                      disabled={busy || (isOnlySuper && r.role === 'super')}
+                      onChange={(e) =>
+                        r.email && handleChangeRole(r.email, e.target.value as 'super' | 'couple')
+                      }
+                      className="rounded-md border border-brand-sage/40 bg-white px-2 py-1 text-xs"
+                    >
+                      <option value="super">Super admin</option>
+                      <option value="couple">Couple admin</option>
+                    </select>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemove(r.userId, label)}
+                      disabled={busy || isOnlySuper}
+                      title={isOnlySuper ? 'Cannot remove the last super admin' : 'Remove admin'}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <div className="space-y-2 border-t border-brand-sage/20 pt-3">
+          <p className="text-sm font-semibold">Add admin</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              type="email"
+              placeholder="user@example.com"
+              value={addEmail}
+              onChange={(e) => setAddEmail(e.target.value)}
+              className="flex-1 min-w-[180px]"
+            />
+            <select
+              value={addRole}
+              onChange={(e) => setAddRole(e.target.value as 'super' | 'couple')}
+              className="rounded-md border border-brand-sage/40 bg-white px-2 py-1 text-sm"
+            >
+              <option value="couple">Couple admin</option>
+              <option value="super">Super admin</option>
+            </select>
+            <Button size="sm" onClick={handleAdd} disabled={busy || !addEmail.trim()}>
+              {busy ? 'Working…' : 'Add'}
+            </Button>
+          </div>
+          <p className="text-xs text-textSecondary">
+            User must already have signed in at least once. Super admin grants Global edit power.
+          </p>
+        </div>
+
+        {msg && (
+          <p className={cn('text-xs', msg.tone === 'ok' ? 'text-success' : 'text-red-600')}>
+            {msg.text}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

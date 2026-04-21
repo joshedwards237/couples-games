@@ -31,7 +31,11 @@ export interface PrankContextValue {
   /** The current user's couple id, if any. */
   coupleId: string | null;
   adminUserIds: Set<string>;
+  /** User ids that are specifically SUPER prank admins (Global + couple power). */
+  superAdminUserIds: Set<string>;
   isPrankAdmin: boolean;
+  /** True iff current user is specifically a super prank admin. */
+  isSuperPrankAdmin: boolean;
   isAppAdmin: boolean;
   isAdmin: boolean;
   refresh: () => Promise<void>;
@@ -59,6 +63,7 @@ export function PrankProvider({ children }: { children: React.ReactNode }) {
   const [coupleId, setCoupleId] = useState<string | null>(null);
   const [exemptions, setExemptions] = useState<ExemptMap>({});
   const [adminUserIds, setAdminUserIds] = useState<Set<string>>(new Set());
+  const [superAdminUserIds, setSuperAdminUserIds] = useState<Set<string>>(new Set());
   const [appAdminUserIds, setAppAdminUserIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
@@ -68,6 +73,7 @@ export function PrankProvider({ children }: { children: React.ReactNode }) {
       setCoupleId(null);
       setExemptions({});
       setAdminUserIds(new Set());
+      setSuperAdminUserIds(new Set());
       setAppAdminUserIds(new Set());
       setLoading(false);
       return;
@@ -78,7 +84,7 @@ export function PrankProvider({ children }: { children: React.ReactNode }) {
       const [cfgRes, exRes, adminRes, appAdminRes, memberRes] = await Promise.all([
         supabase.from('prank_config').select('*'),
         supabase.from('prank_exemptions').select('user_id, prank_key'),
-        supabase.from('prank_admins').select('user_id'),
+        supabase.from('prank_admins').select('user_id, role'),
         supabase.from('app_admins').select('user_id'),
         supabase.from('couple_members').select('couple_id').eq('user_id', user.id).maybeSingle()
       ]);
@@ -137,7 +143,11 @@ export function PrankProvider({ children }: { children: React.ReactNode }) {
       setGlobalConfig(nextGlobal);
       setCoupleOverrides(nextOverrides);
       setExemptions(exMap);
-      setAdminUserIds(new Set((adminRes.data ?? []).map((r: any) => r.user_id as string)));
+      const adminRows = (adminRes.data ?? []) as Array<{ user_id: string; role?: string | null }>;
+      setAdminUserIds(new Set(adminRows.map((r) => r.user_id)));
+      setSuperAdminUserIds(
+        new Set(adminRows.filter((r) => (r.role ?? 'couple') === 'super').map((r) => r.user_id))
+      );
       setAppAdminUserIds(new Set((appAdminRes.data ?? []).map((r: any) => r.user_id as string)));
     } catch (e: any) {
       console.error('prank context load failed', e);
@@ -155,6 +165,11 @@ export function PrankProvider({ children }: { children: React.ReactNode }) {
     if (!user) return false;
     return adminUserIds.has(user.id);
   }, [user, adminUserIds]);
+
+  const isSuperPrankAdmin = useMemo(() => {
+    if (!user) return false;
+    return superAdminUserIds.has(user.id);
+  }, [user, superAdminUserIds]);
 
   const isAppAdmin = useMemo(() => {
     if (!user) return false;
@@ -317,7 +332,9 @@ export function PrankProvider({ children }: { children: React.ReactNode }) {
     exemptions,
     coupleId,
     adminUserIds,
+    superAdminUserIds,
     isPrankAdmin,
+    isSuperPrankAdmin,
     isAppAdmin,
     isAdmin,
     refresh: load,
