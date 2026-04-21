@@ -53,10 +53,16 @@ function markFired(userId: string, puzzleId: string): void {
 
 export function NarrativeOrchestrator({
   guessesUsed,
-  puzzleId
+  puzzleId,
+  testMode = false
 }: {
   guessesUsed: number;
   puzzleId: string;
+  /**
+   * Test mode: admin is opted in, and the per-puzzle dedup is bypassed so
+   * repeated test rounds all get fresh rolls.
+   */
+  testMode?: boolean;
 }) {
   const { user } = useAuth();
   const { config, isAdmin } = usePranks();
@@ -69,8 +75,9 @@ export function NarrativeOrchestrator({
       instant_dm: false,
       sudden_dark_mode: false
     };
-    if (!user || isAdmin) return none;
-    if (hasAlreadyFired(user.id, puzzleId)) return none;
+    if (!user) return none;
+    if (isAdmin && !testMode) return none;
+    if (!testMode && hasAlreadyFired(user.id, puzzleId)) return none;
 
     const check = (key: string) => shouldFirePrank(config[key], user.id, { guessesUsed });
     const rolled = {
@@ -81,8 +88,8 @@ export function NarrativeOrchestrator({
       sudden_dark_mode: check('sudden_dark_mode')
     };
     // Record the roll regardless of outcome so revisits don't get a second
-    // chance at the dice.
-    markFired(user.id, puzzleId);
+    // chance at the dice. Skipped in test mode so the admin can retry.
+    if (!testMode) markFired(user.id, puzzleId);
     return rolled;
     // Dice are rolled once at mount per puzzle. eslint-disable so config
     // mutations mid-play don't re-roll in-session.
