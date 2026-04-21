@@ -30,7 +30,7 @@ export function CoupleMonthlyModal({ entry, onOpenChange }: Props) {
                   className="inline-flex items-center gap-1.5 rounded-full border-2 bg-white/70 px-2.5 py-0.5 text-sm font-semibold"
                   style={{ borderColor: theme.color }}
                 >
-                  {entry.members.map((m) => m.displayName).join(' + ')}
+                  {entry.members.map((m) => (m.displayName || '').trim().split(/\s+/)[0]).filter(Boolean).join(' + ')}
                 </span>
                 {entry.isMine && <span className="ml-2 text-xs text-accent">(your couple)</span>}
               </DialogTitle>
