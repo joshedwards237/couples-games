@@ -492,7 +492,8 @@ function PrankCard({
         <Toggle checked={draftEnabled} onChange={setDraftEnabled} dirty={draftEnabled !== value.enabled} />
       </CardHeader>
 
-      <CardContent className={cn('space-y-4 pt-2', !draftEnabled && 'pointer-events-none opacity-60')}>
+      <CardContent className="space-y-4 pt-2">
+        <div className={cn('space-y-4', !draftEnabled && 'pointer-events-none opacity-60')}>
         <Field
           label="Probability"
           hint={`${Math.round(draftProb * 100)}% of triggers fire`}
@@ -555,6 +556,7 @@ function PrankCard({
             </div>
           </Field>
         )}
+        </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-brand-sage/20 pt-3">
           {scope === 'couple' && hasOverride && onClearOverride ? (
