@@ -87,8 +87,19 @@ export async function createCouple(name?: string | null): Promise<Couple> {
   const { data, error } = await supabase.rpc('create_couple', { p_name: name ?? null });
   if (error) throw error;
   const row = Array.isArray(data) ? data[0] : data;
-  if (!row) throw new Error('create_couple returned no row');
-  return normalizeCouple(row);
+  if (row) return normalizeCouple(row);
+
+  // The RPC returns zero rows when the caller already has a couple_members
+  // entry (legacy clients could also hit this because of a past CTE-visibility
+  // bug where the INSERT succeeded but the SELECT came back empty). Recover
+  // by reading their current couple — they already have one.
+  const { data: session } = await supabase.auth.getUser();
+  const userId = session?.user?.id;
+  if (userId) {
+    const mine = await fetchMyCouple(userId);
+    if (mine) return mine.couple;
+  }
+  throw new Error("Couldn't create couple — try signing out and back in.");
 }
 
 export async function joinCouple(coupleId: string): Promise<Couple> {

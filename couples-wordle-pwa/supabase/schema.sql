@@ -580,6 +580,10 @@ security definer
 volatile
 set search_path = public
 as $$
+  -- Postgres CTE visibility: a trailing SELECT against the base table does
+  -- NOT see rows inserted by a data-modifying CTE in the same statement.
+  -- Return from the `new_couple` CTE directly; guarded on `enrolled` so we
+  -- only emit when the couple_members row was also written.
   with new_couple as (
     insert into public.couples (name, created_by)
     select nullif(trim(p_name), ''), auth.uid()
@@ -594,9 +598,8 @@ as $$
     select id, auth.uid(), 'creator' from new_couple
     returning couple_id
   )
-  select c.*
-  from public.couples c
-  where c.id in (select id from new_couple);
+  select nc.* from new_couple nc
+  where (select count(*) from enrolled) > 0;
 $$;
 
 grant execute on function public.create_couple(text) to authenticated;
