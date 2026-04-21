@@ -259,11 +259,7 @@ interface PlayResult {
 function Play() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const lane: 'classic' | 'couple' | 'bonus' = pathname.endsWith('bonus')
-    ? 'bonus'
-    : pathname.endsWith('couple')
-      ? 'couple'
-      : 'classic';
+  const lane: 'classic' | 'bonus' = pathname.endsWith('bonus') ? 'bonus' : 'classic';
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
   const [existingAttempt, setExistingAttempt] = useState<MyAttempt | null>(null);
   const [inProgress, setInProgress] = useState<MyAttempt | null>(null);
@@ -395,26 +391,27 @@ function Play() {
           />
         )}
         {summary && (
-          <Card className="flex flex-wrap items-center justify-between gap-3 bg-white/80 backdrop-blur">
-            <div className="min-w-0">
-              <p className="font-semibold">
+          <Card className="space-y-3 bg-white/80 backdrop-blur">
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1 font-semibold">
                 {summary.win
                   ? `Solved in ${summary.guesses} ${summary.guesses === 1 ? 'guess' : 'guesses'} · ${formatTime(summary.timeMs)}`
                   : `Out of guesses — answer was ${summary.answer.toUpperCase()}`}
               </p>
-              {saveError && <p className="text-xs text-red-600">Couldn&apos;t save: {saveError}</p>}
-            </div>
-            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="icon"
                 aria-label="Share result"
                 onClick={() => setShareOpen(true)}
+                className="shrink-0"
               >
                 <Share2 />
               </Button>
-              <Button onClick={() => navigate('/')}>See today&apos;s leaderboard</Button>
             </div>
+            {saveError && <p className="text-xs text-red-600">Couldn&apos;t save: {saveError}</p>}
+            <Button className="w-full sm:w-auto" onClick={() => navigate('/')}>
+              See today&apos;s leaderboard
+            </Button>
           </Card>
         )}
         {summary?.win && puzzle && (

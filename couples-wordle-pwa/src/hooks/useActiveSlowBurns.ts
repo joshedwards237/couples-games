@@ -9,13 +9,16 @@ import { hadFastWinThisSession, wasFastWinYesterday, PRANK_DEFS } from '@/lib/pr
  * `fire_next_day` on and the user fast-won yesterday, OR
  * `fire_same_session` on and the user fast-won earlier this session.
  *
- * Admins always get an empty set (no self-trolling).
+ * Admins always get an empty set (no self-trolling) — UNLESS `testMode`
+ * is true, in which case admin immunity is lifted and every enabled slow
+ * burn is eligible (the fast-win pre-conditions are auto-satisfied so the
+ * admin can actually experience the prank while dev-testing).
  *
  * Rolls once per user per stable-config-snapshot: we key the effect on
  * a string digest of the slow-burn-relevant fields so admin tweaks to
  * unrelated pranks don't re-roll dice or burn Supabase round trips.
  */
-export function useActiveSlowBurns(): Set<string> {
+export function useActiveSlowBurns(testMode = false): Set<string> {
   const { user } = useAuth();
   const { config, isAdmin, loading: prankLoading } = usePranks();
   const [active, setActive] = useState<Set<string>>(new Set());
@@ -43,7 +46,11 @@ export function useActiveSlowBurns(): Set<string> {
   }, [config]);
 
   useEffect(() => {
-    if (!user || isAdmin || prankLoading) {
+    if (!user || prankLoading) {
+      setActive(new Set());
+      return;
+    }
+    if (isAdmin && !testMode) {
       setActive(new Set());
       return;
     }
@@ -58,6 +65,13 @@ export function useActiveSlowBurns(): Set<string> {
         if (!settings?.enabled) continue;
         if (settings.exemptUserIds.includes(user.id)) continue;
         if (Math.random() >= settings.probability) continue;
+
+        // Test mode bypasses the fast-win gating — the admin is explicitly
+        // here to see the prank, no need to jump through timing hoops.
+        if (testMode) {
+          next.add(def.key);
+          continue;
+        }
 
         if (settings.fireSameSession && hadFastWinThisSession(user.id)) {
           next.add(def.key);
@@ -81,7 +95,7 @@ export function useActiveSlowBurns(): Set<string> {
     // derived configKey string. Admin toggling an unrelated prank won't
     // re-roll these dice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, isAdmin, prankLoading, configKey]);
+  }, [user?.id, isAdmin, prankLoading, configKey, testMode]);
 
   return active;
 }

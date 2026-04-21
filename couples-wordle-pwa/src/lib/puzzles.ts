@@ -7,7 +7,7 @@ import type { GameLane, Puzzle } from './types';
  * either get the existing bonus row or an empty set — callers must
  * handle null when a bonus hasn't been fired yet.
  */
-export async function fetchPuzzle(lane: 'classic' | 'couple'): Promise<Puzzle>;
+export async function fetchPuzzle(lane: 'classic'): Promise<Puzzle>;
 export async function fetchPuzzle(lane: 'bonus'): Promise<Puzzle | null>;
 export async function fetchPuzzle(lane: GameLane): Promise<Puzzle | null>;
 export async function fetchPuzzle(lane: GameLane): Promise<Puzzle | null> {

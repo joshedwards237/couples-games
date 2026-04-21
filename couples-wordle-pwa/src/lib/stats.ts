@@ -49,64 +49,83 @@ export async function saveAttempt(args: SaveAttemptArgs): Promise<void> {
 }
 
 export async function fetchUserStats(userId: string): Promise<UserStats> {
+  // Fetch classic + bonus finished attempts. Streaks + totalPlayed/totalWins
+  // come from classic only; totalSolves spans classic + bonus.
   const { data, error } = await supabase
     .from('puzzle_attempts')
     .select('win, finished, lane, puzzles!inner(date)')
     .eq('user_id', userId)
     .eq('finished', true)
-    .in('lane', ['classic', 'couple'])
-    .order('date', { foreignTable: 'puzzles', ascending: false });
+    .in('lane', ['classic', 'bonus']);
   if (error) throw error;
 
-  const rows = (data ?? []) as Array<{ win: boolean; finished: boolean; puzzles: { date: string } | { date: string }[] }>;
-  const normalized = rows
+  const all = ((data ?? []) as any[])
     .map((r) => ({
-      win: r.win,
-      date: Array.isArray(r.puzzles) ? r.puzzles[0]?.date : r.puzzles?.date
+      win: r.win as boolean,
+      lane: r.lane as 'classic' | 'bonus',
+      date: (Array.isArray(r.puzzles) ? r.puzzles[0]?.date : r.puzzles?.date) as string
     }))
-    .filter((r): r is { win: boolean; date: string } => Boolean(r.date))
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
+    .filter((r) => Boolean(r.date));
 
-  const totalPlayed = normalized.length;
-  const totalWins = normalized.filter((r) => r.win).length;
+  const classic = all.filter((r) => r.lane === 'classic');
+  const totalPlayed = classic.length;
+  const totalWins = classic.filter((r) => r.win).length;
+  const totalSolves = all.filter((r) => r.win).length; // classic + bonus wins
+
+  // Map date → did the user win the classic puzzle that day. One attempt
+  // per user per puzzle_id (UNIQUE), one classic puzzle per date, so safe.
+  const classicByDate = new Map<string, boolean>();
+  for (const r of classic) classicByDate.set(r.date, r.win);
 
   const todayUtc = new Date().toISOString().slice(0, 10);
   let currentStreak = 0;
-  let cursor = todayUtc;
-  for (const row of normalized) {
-    if (!row.win) break;
-    if (row.date === cursor) {
-      currentStreak += 1;
-      cursor = shiftDate(cursor, -1);
-    } else if (row.date === shiftDate(cursor, -1) && cursor === todayUtc) {
-      // allow the streak to include yesterday if today isn't played yet
-      currentStreak += 1;
-      cursor = shiftDate(row.date, -1);
-    } else {
-      break;
-    }
+  // If today's classic is played, start walking from today; otherwise
+  // start from yesterday so a not-yet-played-today doesn't mask the
+  // user's ongoing streak. A classic LOSS today zeroes it out.
+  let cursor: string | null;
+  if (classicByDate.has(todayUtc)) {
+    cursor = classicByDate.get(todayUtc) === true ? todayUtc : null;
+  } else {
+    cursor = shiftDate(todayUtc, -1);
+  }
+  while (cursor && classicByDate.get(cursor) === true) {
+    currentStreak += 1;
+    cursor = shiftDate(cursor, -1);
   }
 
+  // Max streak: walk classic attempts ascending, reset on missed day or loss.
   let maxStreak = 0;
   let running = 0;
   let prev: string | null = null;
-  const ascending = [...normalized].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const ascending = [...classic].sort((a, b) => (a.date < b.date ? -1 : 1));
   for (const row of ascending) {
     if (!row.win) {
       running = 0;
       prev = row.date;
       continue;
     }
-    if (prev && shiftDate(prev, 1) === row.date) {
-      running += 1;
-    } else {
-      running = 1;
-    }
+    running = prev && shiftDate(prev, 1) === row.date ? running + 1 : 1;
     if (running > maxStreak) maxStreak = running;
     prev = row.date;
   }
 
-  return { currentStreak, maxStreak, totalWins, totalPlayed };
+  // Head-to-head wins against the user's partner. The 'win' trophy kind
+  // is awarded exclusively inside the couple H2H block (see
+  // award_trophies_for_attempt), so counting those rows is the canonical
+  // source of truth for H2H wins.
+  let h2hWins = 0;
+  try {
+    const { count } = await supabase
+      .from('trophies')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('kind', 'win');
+    h2hWins = count ?? 0;
+  } catch (_e) {
+    h2hWins = 0;
+  }
+
+  return { currentStreak, maxStreak, totalWins, totalPlayed, totalSolves, h2hWins };
 }
 
 export async function fetchMyAttempt(userId: string, puzzleId: string): Promise<MyAttempt | null> {
@@ -130,24 +149,69 @@ export async function fetchMyAttempt(userId: string, puzzleId: string): Promise<
 export async function fetchGameHistory(userId: string, limit = 30): Promise<GameHistoryEntry[]> {
   const { data, error } = await supabase
     .from('puzzle_attempts')
-    .select('id, guesses_used, time_ms, hints_used, win, created_at, puzzles!inner(date, word)')
+    .select('id, puzzle_id, guesses_used, time_ms, hints_used, win, created_at, puzzles!inner(date, word)')
     .eq('user_id', userId)
     .eq('finished', true)
     .order('created_at', { ascending: false })
     .limit(limit);
   if (error) throw error;
 
-  return ((data ?? []) as any[]).map((r) => {
+  const rows = (data ?? []) as any[];
+  if (rows.length === 0) return [];
+
+  const puzzleIds = rows.map((r) => r.puzzle_id as string);
+
+  // Source of truth for H2H outcome: the 'win' trophy (kind='win' is
+  // H2H-exclusive post-semantic-restore, and manual overrides live here).
+  // If a user has a 'win' trophy for a puzzle they solved, it's an h2h_win;
+  // otherwise it's 'solved'. This keeps the chip aligned with the trophy
+  // shelf and Profile Wins count.
+  let winTrophyPuzzleIds = new Set<string>();
+  try {
+    const { data: winTrophies } = await supabase
+      .from('trophies')
+      .select('puzzle_id')
+      .eq('user_id', userId)
+      .eq('kind', 'win')
+      .in('puzzle_id', puzzleIds);
+    winTrophyPuzzleIds = new Set(
+      ((winTrophies ?? []) as any[])
+        .map((t) => t.puzzle_id as string | null)
+        .filter((v): v is string => !!v)
+    );
+  } catch (_e) {
+    winTrophyPuzzleIds = new Set();
+  }
+  return rows.map((r) => {
     const puzzle = Array.isArray(r.puzzles) ? r.puzzles[0] : r.puzzles;
+    const selfWin = Boolean(r.win);
+    const selfCreatedAt = r.created_at as string;
+
+    // Outcome rules:
+    //   - didn't solve → missed
+    //   - solved + has 'win' trophy for this puzzle → h2h_win
+    //   - solved + no trophy → solved
+    // The trophy table is authoritative so manual overrides (admin
+    // inserts/deletes) reflect immediately on the chip.
+    let outcome: 'h2h_win' | 'solved' | 'missed';
+    if (!selfWin) {
+      outcome = 'missed';
+    } else if (winTrophyPuzzleIds.has(r.puzzle_id as string)) {
+      outcome = 'h2h_win';
+    } else {
+      outcome = 'solved';
+    }
+
     return {
       id: r.id as string,
       date: puzzle?.date as string,
       word: puzzle?.word as string,
       guessesUsed: r.guesses_used as number,
-      timeMs: r.time_ms as number,
+      timeMs: (r.time_ms as number) ?? 0,
       hintsUsed: r.hints_used as number,
-      win: r.win as boolean,
-      createdAt: r.created_at as string
+      win: selfWin,
+      outcome,
+      createdAt: selfCreatedAt
     } satisfies GameHistoryEntry;
   });
 }
@@ -247,9 +311,11 @@ function firstOfMonthDenver(): string {
 }
 
 /**
- * Monthly leaderboard: total classic wins per user since the first of the
- * current calendar month in Denver time. Ties use the same rank number
- * (computed in the UI). Classic-lane only.
+ * Monthly leaderboard. Primary metric: H2H wins on classic puzzles
+ * scoped to the current Denver calendar month — sourced from the
+ * trophies table (kind='win' is awarded exclusively to the H2H winner).
+ * Secondary metric: total solves (classic + bonus wins) this month,
+ * used as a tiebreaker and rendered alongside.
  */
 export async function fetchMonthlyWinsLeaderboard(
   currentUserId: string | null
@@ -258,23 +324,43 @@ export async function fetchMonthlyWinsLeaderboard(
   const monthStart = firstOfMonthDenver();
   const memberIds = await coupleMemberIds(currentUserId);
 
-  const { data, error } = await supabase
+  // Month-scoped H2H wins: join trophies → puzzles, filter kind='win'
+  // and the puzzle's lane='classic' + date >= monthStart.
+  const { data: winRows, error: winErr } = await supabase
+    .from('trophies')
+    .select('user_id, puzzles!inner(date, lane)')
+    .eq('kind', 'win')
+    .eq('puzzles.lane', 'classic')
+    .gte('puzzles.date', monthStart)
+    .in('user_id', memberIds);
+  if (winErr) throw winErr;
+
+  // Month-scoped solves (classic + bonus). We keep the same member-id
+  // filter so the leaderboard stays scoped to the couple.
+  const { data: solveRows, error: solveErr } = await supabase
     .from('puzzle_attempts')
     .select('user_id, puzzles!inner(date, lane)')
     .eq('finished', true)
     .eq('win', true)
-    .eq('puzzles.lane', 'classic')
+    .in('puzzles.lane', ['classic', 'bonus'])
     .gte('puzzles.date', monthStart)
     .in('user_id', memberIds);
-  if (error) throw error;
+  if (solveErr) throw solveErr;
 
-  const rows = (data ?? []) as Array<{ user_id: string }>;
-  if (rows.length === 0) return [];
+  const wins = new Map<string, number>();
+  for (const r of (winRows ?? []) as Array<{ user_id: string }>) {
+    wins.set(r.user_id, (wins.get(r.user_id) ?? 0) + 1);
+  }
+  const solves = new Map<string, number>();
+  for (const r of (solveRows ?? []) as Array<{ user_id: string }>) {
+    solves.set(r.user_id, (solves.get(r.user_id) ?? 0) + 1);
+  }
 
-  const counts = new Map<string, number>();
-  for (const r of rows) counts.set(r.user_id, (counts.get(r.user_id) ?? 0) + 1);
+  // Union of user_ids that appear in either metric, so a partner who
+  // solved but never won H2H still shows up (with 0 wins, N solves).
+  const userIds = Array.from(new Set([...wins.keys(), ...solves.keys()]));
+  if (userIds.length === 0) return [];
 
-  const userIds = Array.from(counts.keys());
   const { data: profiles, error: pErr } = await supabase
     .from('profiles')
     .select('user_id, display_name, avatar_url')
@@ -296,18 +382,22 @@ export async function fetchMonthlyWinsLeaderboard(
     });
   }
 
-  return Array.from(counts.entries())
-    .map(([userId, wins]) => {
+  return userIds
+    .map((userId) => {
       const pf = profileById.get(userId);
       return {
         userId,
         displayName: pf?.displayName || 'Player',
         avatarUrl: pf?.avatarUrl ?? null,
-        wins,
+        wins: wins.get(userId) ?? 0,
+        totalSolves: solves.get(userId) ?? 0,
         isYou: userId === currentUserId
       } satisfies MonthlyLeaderboardEntry;
     })
-    .sort((a, b) => b.wins - a.wins);
+    .sort((a, b) => {
+      if (b.wins !== a.wins) return b.wins - a.wins;
+      return b.totalSolves - a.totalSolves;
+    });
 }
 
 function shiftDate(date: string, days: number): string {

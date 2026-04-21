@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/Layout';
 import { Board } from '@/components/Board';
+import { NarrativeOrchestrator } from '@/components/pranks/NarrativeOrchestrator';
 import { usePranks } from '@/context/PrankContext';
 import { fetchPuzzle } from '@/lib/puzzles';
 import { supabase } from '@/lib/supabase';
@@ -106,6 +107,7 @@ export function AdminPanel() {
   const [testRows, setTestRows] = useState<string[]>([]);
   const [boardKey, setBoardKey] = useState(0);
   const [finished, setFinished] = useState(false);
+  const [winInfo, setWinInfo] = useState<{ guessesUsed: number; round: number } | null>(null);
 
   // Load today's daily answer so the test pool can exclude it, then hydrate
   // any previously-saved test puzzle state from localStorage.
@@ -155,6 +157,7 @@ export function AdminPanel() {
     setTestWord(w);
     setTestRows([]);
     setFinished(false);
+    setWinInfo(null);
     saveTestPuzzle({ word: w, rows: [], finished: false });
     setBoardKey((k) => k + 1);
   };
@@ -163,6 +166,7 @@ export function AdminPanel() {
     if (!testWord) return;
     setTestRows([]);
     setFinished(false);
+    setWinInfo(null);
     saveTestPuzzle({ word: testWord, rows: [], finished: false });
     setBoardKey((k) => k + 1);
   };
@@ -173,11 +177,13 @@ export function AdminPanel() {
     saveTestPuzzle({ word: testWord, rows, finished: false });
   };
 
-  const handleComplete = ({ rows }: { win: boolean; rows: string[] }) => {
+  const handleComplete = ({ win, rows }: { win: boolean; rows: string[] }) => {
     if (!testWord) return;
     setTestRows(rows);
     setFinished(true);
     saveTestPuzzle({ word: testWord, rows, finished: true });
+    if (win) setWinInfo({ guessesUsed: rows.length, round: boardKey });
+    else setWinInfo(null);
   };
 
   const initialRows = useMemo(() => testRows, [boardKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -238,12 +244,22 @@ export function AdminPanel() {
                 initialRows={initialRows}
                 onProgress={handleProgress}
                 onComplete={handleComplete}
+                testMode
               />
             ) : (
               <p className="text-sm text-textSecondary">Loading test word…</p>
             )}
           </CardContent>
         </Card>
+
+        {winInfo && testWord && (
+          <NarrativeOrchestrator
+            key={`admin-test-narrative:${winInfo.round}`}
+            guessesUsed={winInfo.guessesUsed}
+            puzzleId={`admin-test:${testWord}:${winInfo.round}`}
+            testMode
+          />
+        )}
       </div>
     </Layout>
   );

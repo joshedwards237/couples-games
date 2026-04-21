@@ -19,6 +19,12 @@ interface BoardProps {
   /** Fires after every non-final submit so the caller can persist progress. */
   onProgress?: (rows: string[]) => void;
   onComplete?: (result: { win: boolean; rows: string[] }) => void;
+  /**
+   * When true, the admin is explicitly opted INTO pranks for this board
+   * (used by the admin test puzzle so the admin can experience the pranks
+   * they've enabled). Default false — admins are immune everywhere else.
+   */
+  testMode?: boolean;
 }
 
 const TILE_STAGGER_MS = 150;
@@ -62,7 +68,7 @@ const LOOKALIKE_SWAP: Record<string, string> = {
   N: 'M'
 };
 
-export function Board({ answer, initialRows, onProgress, onComplete }: BoardProps) {
+export function Board({ answer, initialRows, onProgress, onComplete, testMode = false }: BoardProps) {
   const targetLength = answer.length;
   const maxGuesses = 6;
 
@@ -104,13 +110,14 @@ export function Board({ answer, initialRows, onProgress, onComplete }: BoardProp
 
   const { user } = useAuth();
   const { config, isAdmin } = usePranks();
-  const activeSlowBurns = useActiveSlowBurns();
+  const activeSlowBurns = useActiveSlowBurns(testMode);
   const autocorrectActive = activeSlowBurns.has('autocorrect_sabotage');
   const reverseActive = activeSlowBurns.has('reverse_keystrokes');
   const tileRebellionActive = activeSlowBurns.has('tile_rebellion');
 
-  // Admins never get trolled. Everyone else is fair game if the prank fires.
-  const prankEligible = !!user && !isAdmin;
+  // Admins never get trolled on real puzzles. Test mode opts them back in
+  // so they can actually experience the pranks they're tuning.
+  const prankEligible = !!user && (!isAdmin || testMode);
   const movingEnterCfg = prankEligible ? config['moving_enter'] : undefined;
   const nextAttemptCount = guesses.length + 1;
 
