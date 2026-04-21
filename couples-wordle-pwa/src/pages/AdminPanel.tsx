@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Layout } from '@/components/Layout';
 import { Board } from '@/components/Board';
 import { NarrativeOrchestrator } from '@/components/pranks/NarrativeOrchestrator';
+import { UsersCard } from '@/components/UsersCard';
 import { usePranks } from '@/context/PrankContext';
 import { fetchPuzzle } from '@/lib/puzzles';
 import { supabase } from '@/lib/supabase';
@@ -214,6 +215,8 @@ export function AdminPanel() {
         )}
 
         <BonusWordleCard />
+
+        <UsersCard />
 
         <Card className="bg-white/80 backdrop-blur">
           <CardHeader className="space-y-1">

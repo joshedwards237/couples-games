@@ -3444,3 +3444,128 @@ as $$
 $$;
 
 grant execute on function public.get_global_monthly_couple_leaderboard(date) to authenticated;
+
+-- =========================================================================
+-- Admin user management RPCs (app-admin only). Used by the Users card on
+-- the /admin page. Self-demote and self-delete blocked.
+-- =========================================================================
+
+create or replace function public.admin_list_users()
+returns table (
+  user_id uuid,
+  email text,
+  display_name text,
+  avatar_url text,
+  created_at timestamptz,
+  is_app_admin boolean,
+  is_prank_admin boolean,
+  couple_id uuid,
+  couple_name text,
+  couple_theme_color text,
+  partner_user_id uuid,
+  partner_display_name text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null or not public.is_app_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+
+  return query
+  with my_couples as (
+    select cm.user_id, cm.couple_id from public.couple_members cm
+  ),
+  partners as (
+    select
+      me.user_id,
+      other.user_id as partner_user_id,
+      pp.display_name as partner_display_name
+    from my_couples me
+    left join my_couples other
+      on other.couple_id = me.couple_id and other.user_id <> me.user_id
+    left join public.profiles pp on pp.user_id = other.user_id
+  )
+  select
+    u.id,
+    u.email::text,
+    coalesce(p.display_name, '')::text,
+    coalesce(p.avatar_url, '')::text,
+    u.created_at,
+    (aa.user_id is not null),
+    (pa.user_id is not null),
+    c.id,
+    c.name,
+    c.theme_color,
+    pt.partner_user_id,
+    pt.partner_display_name::text
+  from auth.users u
+  left join public.profiles p on p.user_id = u.id
+  left join public.app_admins aa on aa.user_id = u.id
+  left join public.prank_admins pa on pa.user_id = u.id
+  left join my_couples mc on mc.user_id = u.id
+  left join public.couples c on c.id = mc.couple_id
+  left join partners pt on pt.user_id = u.id
+  order by u.created_at desc;
+end;
+$$;
+
+revoke all on function public.admin_list_users() from public, anon;
+grant execute on function public.admin_list_users() to authenticated;
+
+create or replace function public.admin_set_app_admin_role(p_user_id uuid, p_enabled boolean)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or not public.is_app_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+  if p_user_id = auth.uid() and p_enabled = false then
+    raise exception 'cannot demote yourself';
+  end if;
+  if p_enabled then
+    insert into public.app_admins (user_id) values (p_user_id)
+    on conflict (user_id) do nothing;
+  else
+    delete from public.app_admins where user_id = p_user_id;
+  end if;
+end;
+$$;
+
+revoke all on function public.admin_set_app_admin_role(uuid, boolean) from public, anon;
+grant execute on function public.admin_set_app_admin_role(uuid, boolean) to authenticated;
+
+create or replace function public.admin_set_prank_admin_role(p_user_id uuid, p_enabled boolean)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or not public.is_app_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+  if p_enabled then
+    insert into public.prank_admins (user_id) values (p_user_id)
+    on conflict (user_id) do nothing;
+  else
+    delete from public.prank_admins where user_id = p_user_id;
+  end if;
+end;
+$$;
+
+revoke all on function public.admin_set_prank_admin_role(uuid, boolean) from public, anon;
+grant execute on function public.admin_set_prank_admin_role(uuid, boolean) to authenticated;
+
+create or replace function public.admin_delete_user(p_user_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or not public.is_app_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+  if p_user_id = auth.uid() then
+    raise exception 'cannot delete yourself';
+  end if;
+  delete from auth.users where id = p_user_id;
+end;
+$$;
+
+revoke all on function public.admin_delete_user(uuid) from public, anon;
+grant execute on function public.admin_delete_user(uuid) to authenticated;
