@@ -3038,3 +3038,44 @@ begin
   end if;
 end;
 $$;
+
+-- =========================================================================
+-- Per-couple prank overrides. One row per (couple_id, prank_key) with any
+-- field nullable — NULL means "inherit from the global prank_config row".
+-- The client merges field-by-field: resolved = { ...global, ...override }.
+-- Exemptions remain global per-user (couples don't override those).
+-- =========================================================================
+create table if not exists public.prank_couple_overrides (
+  couple_id           uuid not null references public.couples(id) on delete cascade,
+  prank_key           text not null references public.prank_config(prank_key) on delete cascade,
+  enabled             boolean,
+  probability         numeric check (probability is null or (probability >= 0 and probability <= 1)),
+  trigger_max_guesses int     check (trigger_max_guesses is null or (trigger_max_guesses between 1 and 6)),
+  fire_same_session   boolean,
+  fire_next_day       boolean,
+  updated_at          timestamptz not null default now(),
+  primary key (couple_id, prank_key)
+);
+
+drop trigger if exists prank_couple_overrides_set_updated_at on public.prank_couple_overrides;
+create trigger prank_couple_overrides_set_updated_at
+before update on public.prank_couple_overrides
+for each row execute function public.tg_prank_config_set_updated_at();
+
+alter table public.prank_couple_overrides enable row level security;
+alter table public.prank_couple_overrides force row level security;
+revoke all on public.prank_couple_overrides from public, anon;
+grant select, insert, update, delete on public.prank_couple_overrides to authenticated;
+
+drop policy if exists "couple prank overrides readable by couple" on public.prank_couple_overrides;
+create policy "couple prank overrides readable by couple"
+  on public.prank_couple_overrides for select
+  to authenticated
+  using (public.is_member_of_couple(couple_id));
+
+drop policy if exists "couple prank overrides writable by admin member" on public.prank_couple_overrides;
+create policy "couple prank overrides writable by admin member"
+  on public.prank_couple_overrides for all
+  to authenticated
+  using (public.is_prank_admin(auth.uid()) and public.is_member_of_couple(couple_id))
+  with check (public.is_prank_admin(auth.uid()) and public.is_member_of_couple(couple_id));
