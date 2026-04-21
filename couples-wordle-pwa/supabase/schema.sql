@@ -409,6 +409,8 @@ create table if not exists public.couples (
 alter table public.couples add column if not exists name text;
 alter table public.couples add column if not exists created_by uuid references auth.users(id) on delete cascade;
 alter table public.couples add column if not exists created_at timestamptz not null default now();
+alter table public.couples add column if not exists theme_color text
+  check (theme_color is null or theme_color ~ '^#[0-9a-fA-F]{6}$');
 
 do $$
 begin
@@ -439,6 +441,40 @@ create policy "couples readable by members"
       where cm.couple_id = couples.id and cm.user_id = auth.uid()
     )
   );
+
+-- Either member can set their couple's theme_color. Writes go through the
+-- SECURITY DEFINER RPC below, not direct UPDATEs — this policy stays
+-- narrow on purpose.
+create or replace function public.update_couple_theme_color(p_color text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_couple uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+  if p_color is not null and p_color !~ '^#[0-9a-fA-F]{6}$' then
+    raise exception 'invalid hex color: %', p_color;
+  end if;
+
+  select cm.couple_id into v_couple
+  from public.couple_members cm
+  where cm.user_id = v_uid;
+
+  if v_couple is null then
+    raise exception 'not in a couple';
+  end if;
+
+  update public.couples set theme_color = p_color where id = v_couple;
+end;
+$$;
+
+grant execute on function public.update_couple_theme_color(text) to authenticated;
 
 -- couple_members: unique(user_id) so a user can only be in one couple.
 create table if not exists public.couple_members (
@@ -3242,3 +3278,169 @@ $$;
 
 revoke all on function public.admin_list_prank_admins() from public, anon;
 grant execute on function public.admin_list_prank_admins() to authenticated;
+
+-- =========================================================================
+-- Global couple leaderboards — cross-couple leaderboard RPCs. SECURITY
+-- DEFINER so they can aggregate across couples that the caller isn't
+-- directly a member of (couples/couple_members RLS restricts direct reads).
+-- =========================================================================
+
+-- Daily global leaderboard: one row per couple where BOTH members solved
+-- the given puzzle. Ranked by avg guesses asc, avg time asc.
+create or replace function public.get_global_daily_couple_leaderboard(p_puzzle_id uuid)
+returns table (
+  couple_id uuid,
+  theme_color text,
+  m1_user_id uuid,
+  m1_display_name text,
+  m1_guesses_used int,
+  m1_time_ms int,
+  m1_rows jsonb,
+  m2_user_id uuid,
+  m2_display_name text,
+  m2_guesses_used int,
+  m2_time_ms int,
+  m2_rows jsonb,
+  avg_guesses numeric,
+  avg_time_ms numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with paired as (
+    select
+      cm.couple_id,
+      pa.user_id,
+      pa.guesses_used,
+      pa.time_ms,
+      pa.rows,
+      pr.display_name,
+      row_number() over (partition by cm.couple_id order by pa.user_id) as rn
+    from public.couple_members cm
+    join public.puzzle_attempts pa
+      on pa.user_id = cm.user_id
+     and pa.puzzle_id = p_puzzle_id
+     and pa.finished = true
+     and pa.win = true
+    left join public.profiles pr on pr.user_id = pa.user_id
+  ),
+  qualified as (
+    select p.couple_id from paired p group by p.couple_id having count(*) = 2
+  )
+  select
+    c.id,
+    c.theme_color,
+    p1.user_id, p1.display_name, p1.guesses_used, p1.time_ms, p1.rows,
+    p2.user_id, p2.display_name, p2.guesses_used, p2.time_ms, p2.rows,
+    ((p1.guesses_used + p2.guesses_used) / 2.0)::numeric,
+    ((p1.time_ms + p2.time_ms) / 2.0)::numeric
+  from qualified q
+  join public.couples c on c.id = q.couple_id
+  join paired p1 on p1.couple_id = q.couple_id and p1.rn = 1
+  join paired p2 on p2.couple_id = q.couple_id and p2.rn = 2
+  order by ((p1.guesses_used + p2.guesses_used) / 2.0) asc,
+           ((p1.time_ms + p2.time_ms) / 2.0) asc;
+$$;
+
+grant execute on function public.get_global_daily_couple_leaderboard(uuid) to authenticated;
+
+-- Monthly global: ranks couples by lowest avg guesses across the overlap
+-- set (puzzles where BOTH members solved in the current Denver month).
+create or replace function public.get_global_monthly_couple_leaderboard(p_month_start date)
+returns table (
+  couple_id uuid,
+  theme_color text,
+  m1_user_id uuid,
+  m1_display_name text,
+  m2_user_id uuid,
+  m2_display_name text,
+  overlap_count int,
+  avg_guesses numeric,
+  avg_time_ms numeric,
+  best_guesses numeric,
+  best_time_ms numeric,
+  best_date date
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with
+  member_attempts as (
+    select
+      cm.couple_id,
+      cm.user_id,
+      pa.puzzle_id,
+      pa.guesses_used,
+      pa.time_ms,
+      pz.date as puzzle_date
+    from public.couple_members cm
+    join public.puzzle_attempts pa
+      on pa.user_id = cm.user_id
+     and pa.finished = true
+     and pa.win = true
+    join public.puzzles pz on pz.id = pa.puzzle_id
+    where pz.lane = 'classic' and pz.date >= p_month_start
+  ),
+  overlap as (
+    select
+      ma.couple_id,
+      ma.puzzle_id,
+      ma.puzzle_date,
+      sum(ma.guesses_used) as sum_guesses,
+      sum(ma.time_ms) as sum_time_ms
+    from member_attempts ma
+    group by ma.couple_id, ma.puzzle_id, ma.puzzle_date
+    having count(*) = 2
+  ),
+  couple_stats as (
+    select
+      o.couple_id,
+      count(*)::int as overlap_count,
+      (sum(o.sum_guesses) / (count(*) * 2.0))::numeric as avg_guesses,
+      (sum(o.sum_time_ms) / (count(*) * 2.0))::numeric as avg_time_ms
+    from overlap o
+    group by o.couple_id
+  ),
+  best as (
+    select distinct on (o.couple_id)
+      o.couple_id,
+      (o.sum_guesses / 2.0) as best_guesses,
+      (o.sum_time_ms / 2.0) as best_time_ms,
+      o.puzzle_date as best_date
+    from overlap o
+    order by o.couple_id, (o.sum_guesses / 2.0) asc, (o.sum_time_ms / 2.0) asc
+  ),
+  member_pair as (
+    select
+      cm.couple_id,
+      cm.user_id,
+      pr.display_name,
+      row_number() over (partition by cm.couple_id order by cm.user_id) as rn
+    from public.couple_members cm
+    left join public.profiles pr on pr.user_id = cm.user_id
+    where cm.couple_id in (select cs.couple_id from couple_stats cs)
+  )
+  select
+    c.id,
+    c.theme_color,
+    mp1.user_id, mp1.display_name,
+    mp2.user_id, mp2.display_name,
+    cs.overlap_count,
+    cs.avg_guesses,
+    cs.avg_time_ms,
+    b.best_guesses,
+    b.best_time_ms,
+    b.best_date
+  from couple_stats cs
+  join public.couples c on c.id = cs.couple_id
+  left join best b on b.couple_id = cs.couple_id
+  left join member_pair mp1 on mp1.couple_id = cs.couple_id and mp1.rn = 1
+  left join member_pair mp2 on mp2.couple_id = cs.couple_id and mp2.rn = 2
+  order by cs.avg_guesses asc, cs.avg_time_ms asc;
+$$;
+
+grant execute on function public.get_global_monthly_couple_leaderboard(date) to authenticated;

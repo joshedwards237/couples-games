@@ -3,6 +3,8 @@ import type {
   GameHistoryEntry,
   GameLane,
   GameMode,
+  GlobalDailyCoupleEntry,
+  GlobalMonthlyCoupleEntry,
   LeaderboardEntry,
   LetterEval,
   MonthlyLeaderboardEntry,
@@ -398,6 +400,135 @@ export async function fetchMonthlyWinsLeaderboard(
       if (b.wins !== a.wins) return b.wins - a.wins;
       return b.totalSolves - a.totalSolves;
     });
+}
+
+/**
+ * Cross-couple daily leaderboard. Only couples where BOTH members solved
+ * the given classic puzzle appear. Ranked by avg guesses asc, avg time
+ * asc. Uses a SECURITY DEFINER RPC because couples/couple_members RLS
+ * restricts direct reads to the caller's own couple.
+ */
+export async function fetchGlobalDailyCoupleLeaderboard(
+  puzzleId: string,
+  currentUserId: string | null
+): Promise<GlobalDailyCoupleEntry[]> {
+  if (!puzzleId) return [];
+  const { data, error } = await supabase.rpc('get_global_daily_couple_leaderboard', {
+    p_puzzle_id: puzzleId
+  });
+  if (error) throw error;
+
+  const rows = (data ?? []) as Array<{
+    couple_id: string;
+    theme_color: string | null;
+    m1_user_id: string;
+    m1_display_name: string | null;
+    m1_guesses_used: number;
+    m1_time_ms: number;
+    m1_rows: string[] | null;
+    m2_user_id: string;
+    m2_display_name: string | null;
+    m2_guesses_used: number;
+    m2_time_ms: number;
+    m2_rows: string[] | null;
+    avg_guesses: number | string;
+    avg_time_ms: number | string;
+  }>;
+
+  // We need the puzzle word to compute the tile color grid. Fetch once.
+  const { data: puzzle, error: pErr } = await supabase
+    .from('puzzles')
+    .select('word')
+    .eq('id', puzzleId)
+    .single();
+  if (pErr) throw pErr;
+  const word = (puzzle?.word as string) ?? '';
+
+  return rows.map((r) => {
+    const m1Rows = Array.isArray(r.m1_rows) ? r.m1_rows : [];
+    const m2Rows = Array.isArray(r.m2_rows) ? r.m2_rows : [];
+    const isMine = !!currentUserId && (r.m1_user_id === currentUserId || r.m2_user_id === currentUserId);
+    return {
+      coupleId: r.couple_id,
+      themeColor: r.theme_color,
+      members: [
+        {
+          userId: r.m1_user_id,
+          displayName: r.m1_display_name || 'Player',
+          guessesUsed: r.m1_guesses_used,
+          timeMs: r.m1_time_ms,
+          rows: m1Rows,
+          evaluations: m1Rows.map((row) => evaluateRow(row, word))
+        },
+        {
+          userId: r.m2_user_id,
+          displayName: r.m2_display_name || 'Player',
+          guessesUsed: r.m2_guesses_used,
+          timeMs: r.m2_time_ms,
+          rows: m2Rows,
+          evaluations: m2Rows.map((row) => evaluateRow(row, word))
+        }
+      ],
+      avgGuesses: Number(r.avg_guesses),
+      avgTimeMs: Number(r.avg_time_ms),
+      isMine
+    } satisfies GlobalDailyCoupleEntry;
+  });
+}
+
+/**
+ * Cross-couple monthly leaderboard. Per couple, aggregates ONLY the
+ * puzzles where both members solved (the "overlap set"). Ranked by avg
+ * guesses asc, avg time asc. Uses a SECURITY DEFINER RPC for the same
+ * reason as the daily variant.
+ */
+export async function fetchGlobalMonthlyCoupleLeaderboard(
+  currentUserId: string | null
+): Promise<GlobalMonthlyCoupleEntry[]> {
+  const monthStart = firstOfMonthDenver();
+  const { data, error } = await supabase.rpc('get_global_monthly_couple_leaderboard', {
+    p_month_start: monthStart
+  });
+  if (error) throw error;
+
+  const rows = (data ?? []) as Array<{
+    couple_id: string;
+    theme_color: string | null;
+    m1_user_id: string | null;
+    m1_display_name: string | null;
+    m2_user_id: string | null;
+    m2_display_name: string | null;
+    overlap_count: number;
+    avg_guesses: number | string;
+    avg_time_ms: number | string;
+    best_guesses: number | string | null;
+    best_time_ms: number | string | null;
+    best_date: string | null;
+  }>;
+
+  return rows.map((r) => {
+    const members: GlobalMonthlyCoupleEntry['members'] = [];
+    if (r.m1_user_id) members.push({ userId: r.m1_user_id, displayName: r.m1_display_name || 'Player' });
+    if (r.m2_user_id) members.push({ userId: r.m2_user_id, displayName: r.m2_display_name || 'Player' });
+    const isMine = !!currentUserId && members.some((m) => m.userId === currentUserId);
+    return {
+      coupleId: r.couple_id,
+      themeColor: r.theme_color,
+      members,
+      overlapCount: r.overlap_count,
+      avgGuesses: Number(r.avg_guesses),
+      avgTimeMs: Number(r.avg_time_ms),
+      bestSolve:
+        r.best_date && r.best_guesses !== null && r.best_time_ms !== null
+          ? {
+              guesses: Number(r.best_guesses),
+              timeMs: Number(r.best_time_ms),
+              date: r.best_date
+            }
+          : null,
+      isMine
+    } satisfies GlobalMonthlyCoupleEntry;
+  });
 }
 
 function shiftDate(date: string, days: number): string {

@@ -16,18 +16,23 @@ import { Button } from '@/components/ui/button';
 import { usePranks } from '@/context/PrankContext';
 import { cn } from '@/lib/utils';
 import { fetchWinnersForPuzzle } from '@/lib/trophies';
-import type { LeaderboardEntry, LetterEval } from '@/lib/types';
+import type { GlobalDailyCoupleEntry, LeaderboardEntry, LetterEval } from '@/lib/types';
+import { CouplePill } from '@/components/CouplePill';
+import { CoupleDailyModal } from '@/components/CoupleDailyModal';
 
 interface Props {
   entries: LeaderboardEntry[];
+  globalCoupleEntries?: GlobalDailyCoupleEntry[];
   loading?: boolean;
   /** When provided, flags users who earned today's Daily W trophy. */
   puzzleId?: string | null;
 }
 
-export function Leaderboard({ entries, loading, puzzleId }: Props) {
+export function Leaderboard({ entries, globalCoupleEntries = [], loading, puzzleId }: Props) {
   const navigate = useNavigate();
+  const [tab, setTab] = useState<'couple' | 'global'>('couple');
   const [openEntry, setOpenEntry] = useState<LeaderboardEntry | null>(null);
+  const [openCouple, setOpenCouple] = useState<GlobalDailyCoupleEntry | null>(null);
   const [todayWinners, setTodayWinners] = useState<Set<string>>(new Set());
   const { config, adminUserIds } = usePranks();
   const impostorCfg = config['impostor_badge'];
@@ -110,16 +115,24 @@ export function Leaderboard({ entries, loading, puzzleId }: Props) {
 
   return (
     <Card className="space-y-3 bg-white/80 backdrop-blur">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h2 className="font-heading text-lg font-bold">Today&apos;s leaderboard</h2>
-        <span className="text-xs text-textSecondary">{entries.length} finished</span>
+        <div className="flex items-center gap-1">
+          <TabButton active={tab === 'couple'} onClick={() => setTab('couple')}>
+            Couple
+          </TabButton>
+          <TabButton active={tab === 'global'} onClick={() => setTab('global')}>
+            Global
+          </TabButton>
+        </div>
       </div>
 
-      {loading ? (
-        <p className="text-sm text-textSecondary">Loading…</p>
-      ) : entries.length === 0 ? (
-        <p className="text-sm text-textSecondary">No one has finished today&apos;s puzzle yet.</p>
-      ) : (
+      {tab === 'couple' ? (
+        loading ? (
+          <p className="text-sm text-textSecondary">Loading…</p>
+        ) : entries.length === 0 ? (
+          <p className="text-sm text-textSecondary">No one has finished today&apos;s puzzle yet.</p>
+        ) : (
         <ul className="divide-y divide-white/50">
           {displayed.map((entry, idx) => (
             <li key={entry.userId}>
@@ -163,6 +176,45 @@ export function Leaderboard({ entries, loading, puzzleId }: Props) {
                 <span className="shrink-0 text-sm tabular-nums text-textSecondary">
                   {entry.win ? `${entry.guessesUsed}/6` : '—'}
                 </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+        )
+      ) : loading ? (
+        <p className="text-sm text-textSecondary">Loading…</p>
+      ) : globalCoupleEntries.length === 0 ? (
+        <p className="text-sm text-textSecondary">No couples have both solved today&apos;s puzzle yet.</p>
+      ) : (
+        <ul className="divide-y divide-white/50">
+          {globalCoupleEntries.map((entry, idx) => (
+            <li key={entry.coupleId}>
+              <button
+                type="button"
+                onClick={() => setOpenCouple(entry)}
+                className={cn(
+                  'flex w-full items-center gap-3 rounded-md px-1 py-2 text-left transition-colors',
+                  'hover:bg-white/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
+                  entry.isMine && 'bg-accent/10'
+                )}
+              >
+                <span className="w-6 text-center text-sm font-semibold tabular-nums text-textSecondary">
+                  {idx + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <CouplePill
+                    coupleId={entry.coupleId}
+                    themeColor={entry.themeColor}
+                    memberNames={entry.members.map((m) => m.displayName)}
+                    isMine={entry.isMine}
+                  />
+                </div>
+                <div className="shrink-0 text-right text-xs tabular-nums text-textSecondary">
+                  <div className="text-sm font-semibold text-textPrimary">
+                    Avg {entry.avgGuesses.toFixed(1)}/6
+                  </div>
+                  <div>{formatTime(entry.avgTimeMs)}</div>
+                </div>
               </button>
             </li>
           ))}
@@ -220,7 +272,32 @@ export function Leaderboard({ entries, loading, puzzleId }: Props) {
           )}
         </DialogContent>
       </Dialog>
+
+      <CoupleDailyModal entry={openCouple} onOpenChange={(o) => !o && setOpenCouple(null)} />
     </Card>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors',
+        active ? 'bg-accent/15 text-accent' : 'text-textSecondary hover:text-textPrimary'
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

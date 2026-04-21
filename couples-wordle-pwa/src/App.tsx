@@ -21,8 +21,22 @@ import { PrankProvider } from '@/context/PrankContext';
 import { useA2HS } from '@/hooks/useA2HS';
 import { useCelebration } from '@/hooks/useCelebration';
 import { fetchPuzzle } from '@/lib/puzzles';
-import { fetchLeaderboard, fetchMonthlyWinsLeaderboard, fetchMyAttempt, saveAttempt } from '@/lib/stats';
-import type { LeaderboardEntry, MonthlyLeaderboardEntry, MyAttempt, Puzzle } from '@/lib/types';
+import {
+  fetchGlobalDailyCoupleLeaderboard,
+  fetchGlobalMonthlyCoupleLeaderboard,
+  fetchLeaderboard,
+  fetchMonthlyWinsLeaderboard,
+  fetchMyAttempt,
+  saveAttempt
+} from '@/lib/stats';
+import type {
+  GlobalDailyCoupleEntry,
+  GlobalMonthlyCoupleEntry,
+  LeaderboardEntry,
+  MonthlyLeaderboardEntry,
+  MyAttempt,
+  Puzzle
+} from '@/lib/types';
 import './styles/globals.css';
 import { Profile } from '@/pages/Profile';
 import { PrankDashboard } from '@/pages/PrankDashboard';
@@ -165,6 +179,8 @@ function Home() {
   const [leaderboardLoading, setLeaderboardLoading] = useState(true);
   const [monthly, setMonthly] = useState<MonthlyLeaderboardEntry[]>([]);
   const [monthlyLoading, setMonthlyLoading] = useState(true);
+  const [globalDaily, setGlobalDaily] = useState<GlobalDailyCoupleEntry[]>([]);
+  const [globalMonthly, setGlobalMonthly] = useState<GlobalMonthlyCoupleEntry[]>([]);
   const [finishedToday, setFinishedToday] = useState(false);
   const [bonusAvailable, setBonusAvailable] = useState(false);
   const [bonusFinished, setBonusFinished] = useState(false);
@@ -178,19 +194,29 @@ function Home() {
     const load = async () => {
       try {
         const puzzle = await fetchPuzzle('classic');
-        const [board, myAttempt, monthlyRows, bonusPuzzle] = await Promise.all([
+        const [board, myAttempt, monthlyRows, bonusPuzzle, globalDailyRows, globalMonthlyRows] = await Promise.all([
           fetchLeaderboard(puzzle.id, puzzle.word, user.id),
           fetchMyAttempt(user.id, puzzle.id),
           fetchMonthlyWinsLeaderboard(user.id).catch((e) => {
             console.error('monthly leaderboard failed', e);
             return [] as MonthlyLeaderboardEntry[];
           }),
-          fetchPuzzle('bonus').catch(() => null)
+          fetchPuzzle('bonus').catch(() => null),
+          fetchGlobalDailyCoupleLeaderboard(puzzle.id, user.id).catch((e) => {
+            console.error('global daily couple leaderboard failed', e);
+            return [] as GlobalDailyCoupleEntry[];
+          }),
+          fetchGlobalMonthlyCoupleLeaderboard(user.id).catch((e) => {
+            console.error('global monthly couple leaderboard failed', e);
+            return [] as GlobalMonthlyCoupleEntry[];
+          })
         ]);
         if (cancelled) return;
         setPuzzleId(puzzle.id);
         setLeaderboard(board);
         setMonthly(monthlyRows);
+        setGlobalDaily(globalDailyRows);
+        setGlobalMonthly(globalMonthlyRows);
         setFinishedToday(Boolean(myAttempt?.finished));
 
         if (bonusPuzzle) {
@@ -238,9 +264,18 @@ function Home() {
           )}
         </div>
 
-        <Leaderboard entries={leaderboard} loading={leaderboardLoading} puzzleId={puzzleId} />
+        <Leaderboard
+          entries={leaderboard}
+          globalCoupleEntries={globalDaily}
+          loading={leaderboardLoading}
+          puzzleId={puzzleId}
+        />
 
-        <MonthlyLeaderboard entries={monthly} loading={monthlyLoading} />
+        <MonthlyLeaderboard
+          entries={monthly}
+          globalCoupleEntries={globalMonthly}
+          loading={monthlyLoading}
+        />
 
         {shouldShow && <InstallPrompt onDismiss={dismiss} />}
       </section>
