@@ -21,6 +21,7 @@ import {
   updateCoupleThemeColor
 } from '@/lib/couples';
 import { COUPLE_COLOR_PALETTE, isValidHexColor, resolveCoupleColor } from '@/lib/coupleColors';
+import { CouplePill } from '@/components/CouplePill';
 import { cn } from '@/lib/utils';
 import type { MyCouple } from '@/lib/types';
 
@@ -223,6 +224,7 @@ export function CoupleCard() {
       <ThemeColorPicker
         coupleId={couple.couple.id}
         stored={couple.couple.themeColor}
+        memberNames={[meName, partnerName]}
         onSaved={(color) => setCouple((c) => (c ? { ...c, couple: { ...c.couple, themeColor: color } } : c))}
       />
 
@@ -311,18 +313,27 @@ function initialsFor(name: string): string {
 function ThemeColorPicker({
   coupleId,
   stored,
+  memberNames,
   onSaved
 }: {
   coupleId: string;
   stored: string | null;
+  memberNames: string[];
   onSaved: (color: string | null) => void;
 }) {
   const resolved = resolveCoupleColor(coupleId, stored);
+  // `pending` holds the optimistic selection while the RPC is in flight.
+  // null = no in-flight change, empty string = reset (saving null).
   const [pending, setPending] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const effective = pending ?? stored;
+  const hasPending = pending !== null;
+  const effective = hasPending ? (pending || null) : stored;
   const effectiveHex = isValidHexColor(effective) ? effective : resolved.color;
+
+  const paletteSet = new Set(COUPLE_COLOR_PALETTE.map((c) => c.toLowerCase()));
+  const isCustom =
+    isValidHexColor(effective) && !paletteSet.has(effectiveHex.toLowerCase());
 
   const save = async (next: string | null) => {
     setPending(next ?? '');
@@ -339,16 +350,23 @@ function ThemeColorPicker({
   };
 
   return (
-    <div className="space-y-2 rounded-md bg-white/50 px-3 py-2">
+    <div className="space-y-3 rounded-md bg-white/50 px-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold">Couple theme</p>
         {resolved.isDefault && !stored && (
           <span className="text-[10px] uppercase tracking-wider text-textSecondary">auto</span>
         )}
       </div>
+
+      {/* Live preview — updates optimistically as the user picks. */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wider text-textSecondary">Preview</span>
+        <CouplePill coupleId={coupleId} themeColor={effectiveHex} memberNames={memberNames} />
+      </div>
+
       <div className="flex flex-wrap items-center gap-1.5">
         {COUPLE_COLOR_PALETTE.map((c) => {
-          const selected = effectiveHex.toLowerCase() === c.toLowerCase();
+          const selected = !isCustom && effectiveHex.toLowerCase() === c.toLowerCase();
           return (
             <button
               key={c}
@@ -363,6 +381,22 @@ function ThemeColorPicker({
             />
           );
         })}
+
+        {/* Custom-color swatch — only renders when the active color falls
+            outside the preset palette. Shows the chosen color filled in, so
+            users see their pick land as a new selectable circle. */}
+        {isCustom && (
+          <button
+            type="button"
+            aria-label={`Current custom color ${effectiveHex}`}
+            className="h-6 w-6 scale-110 rounded-full border-2 border-textPrimary transition-transform"
+            style={{ backgroundColor: effectiveHex }}
+            title={effectiveHex}
+          />
+        )}
+
+        {/* "+" label wraps the native color input. Using inset-0 so the
+            entire label surface receives the click and opens the picker. */}
         <label
           className="relative flex h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-dashed border-textSecondary/60 text-[10px] font-bold text-textSecondary"
           title="Pick custom color"
@@ -375,6 +409,7 @@ function ThemeColorPicker({
           />
           <span aria-hidden="true">+</span>
         </label>
+
         {stored && (
           <button
             type="button"
