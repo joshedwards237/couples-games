@@ -409,6 +409,8 @@ create table if not exists public.couples (
 alter table public.couples add column if not exists name text;
 alter table public.couples add column if not exists created_by uuid references auth.users(id) on delete cascade;
 alter table public.couples add column if not exists created_at timestamptz not null default now();
+alter table public.couples add column if not exists theme_color text
+  check (theme_color is null or theme_color ~ '^#[0-9a-fA-F]{6}$');
 
 do $$
 begin
@@ -439,6 +441,40 @@ create policy "couples readable by members"
       where cm.couple_id = couples.id and cm.user_id = auth.uid()
     )
   );
+
+-- Either member can set their couple's theme_color. Writes go through the
+-- SECURITY DEFINER RPC below, not direct UPDATEs — this policy stays
+-- narrow on purpose.
+create or replace function public.update_couple_theme_color(p_color text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_couple uuid;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+  if p_color is not null and p_color !~ '^#[0-9a-fA-F]{6}$' then
+    raise exception 'invalid hex color: %', p_color;
+  end if;
+
+  select cm.couple_id into v_couple
+  from public.couple_members cm
+  where cm.user_id = v_uid;
+
+  if v_couple is null then
+    raise exception 'not in a couple';
+  end if;
+
+  update public.couples set theme_color = p_color where id = v_couple;
+end;
+$$;
+
+grant execute on function public.update_couple_theme_color(text) to authenticated;
 
 -- couple_members: unique(user_id) so a user can only be in one couple.
 create table if not exists public.couple_members (
@@ -3079,3 +3115,332 @@ create policy "couple prank overrides writable by admin member"
   to authenticated
   using (public.is_prank_admin(auth.uid()) and public.is_member_of_couple(couple_id))
   with check (public.is_prank_admin(auth.uid()) and public.is_member_of_couple(couple_id));
+
+-- =========================================================================
+-- Prank admin roles: 'super' manages Global defaults + their own couple;
+-- 'couple' manages only their own couple's overrides. `is_prank_admin` is
+-- the umbrella helper (any role). Tightens prank_config / prank_exemptions
+-- writes to super only.
+-- =========================================================================
+alter table public.prank_admins
+  add column if not exists role text not null default 'couple'
+    check (role in ('super','couple'));
+
+update public.prank_admins
+set role = 'super'
+where user_id in (select id from auth.users where email = 'blackbeltjje@gmail.com')
+  and role <> 'super';
+
+create or replace function public.is_super_prank_admin(u uuid)
+returns boolean language sql stable security definer set search_path = public as
+$$ select exists(select 1 from public.prank_admins where user_id = u and role = 'super') $$;
+
+grant execute on function public.is_super_prank_admin(uuid) to authenticated;
+
+drop policy if exists "prank_config writable by admins" on public.prank_config;
+drop policy if exists "prank_config writable by super admins" on public.prank_config;
+create policy "prank_config writable by super admins"
+  on public.prank_config for all
+  to authenticated
+  using (public.is_super_prank_admin(auth.uid()))
+  with check (public.is_super_prank_admin(auth.uid()));
+
+drop policy if exists "prank_exemptions writable by admins" on public.prank_exemptions;
+drop policy if exists "prank_exemptions writable by super admins" on public.prank_exemptions;
+create policy "prank_exemptions writable by super admins"
+  on public.prank_exemptions for all
+  to authenticated
+  using (public.is_super_prank_admin(auth.uid()))
+  with check (public.is_super_prank_admin(auth.uid()));
+
+-- Update the new-user trigger so the primary admin always lands as 'super'.
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (user_id, display_name, avatar_url)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1), ''),
+    coalesce(
+      nullif(trim(new.raw_user_meta_data->>'avatar_url'), ''),
+      nullif(trim(new.raw_user_meta_data->>'picture'), '')
+    )
+  )
+  on conflict (user_id) do nothing;
+
+  if new.email = any (array['blackbeltjje@gmail.com']) then
+    insert into public.prank_admins (user_id, role) values (new.id, 'super')
+    on conflict (user_id) do update set role = 'super';
+    insert into public.app_admins (user_id) values (new.id)
+    on conflict (user_id) do nothing;
+  end if;
+  return new;
+end;
+$$;
+
+-- -------------------------------------------------------------------------
+-- Admin management RPCs (super-admin only). Roles enforced server-side.
+-- -------------------------------------------------------------------------
+create or replace function public.admin_set_prank_admin(
+  p_email text,
+  p_role  text
+) returns table (user_id uuid, role text, email text, display_name text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_target_id uuid;
+begin
+  if auth.uid() is null or not public.is_super_prank_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+  if p_role not in ('super','couple') then
+    raise exception 'invalid role: %', p_role;
+  end if;
+
+  select id into v_target_id from auth.users where lower(email) = lower(p_email) limit 1;
+  if v_target_id is null then
+    raise exception 'no user found for email: %', p_email;
+  end if;
+
+  insert into public.prank_admins (user_id, role)
+  values (v_target_id, p_role)
+  on conflict (user_id) do update set role = excluded.role;
+
+  return query
+  select pa.user_id, pa.role, u.email::text, coalesce(p.display_name, '')::text
+  from public.prank_admins pa
+  join auth.users u on u.id = pa.user_id
+  left join public.profiles p on p.user_id = pa.user_id
+  where pa.user_id = v_target_id;
+end;
+$$;
+
+revoke all on function public.admin_set_prank_admin(text, text) from public, anon;
+grant execute on function public.admin_set_prank_admin(text, text) to authenticated;
+
+create or replace function public.admin_remove_prank_admin(
+  p_user_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_target_role text;
+  v_super_count int;
+begin
+  if auth.uid() is null or not public.is_super_prank_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+
+  select role into v_target_role from public.prank_admins where user_id = p_user_id;
+  if v_target_role is null then
+    return; -- idempotent
+  end if;
+
+  if v_target_role = 'super' then
+    select count(*) into v_super_count from public.prank_admins where role = 'super';
+    if v_super_count <= 1 then
+      raise exception 'cannot remove the last super admin';
+    end if;
+  end if;
+
+  delete from public.prank_admins where user_id = p_user_id;
+end;
+$$;
+
+revoke all on function public.admin_remove_prank_admin(uuid) from public, anon;
+grant execute on function public.admin_remove_prank_admin(uuid) to authenticated;
+
+create or replace function public.admin_list_prank_admins()
+returns table (user_id uuid, email text, display_name text, role text)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Any prank admin (super OR couple) can read the list so the dashboard
+  -- renders their own row. Write RPCs still gate on super.
+  if auth.uid() is null or not public.is_prank_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+
+  return query
+  select pa.user_id, u.email::text, coalesce(p.display_name, '')::text, pa.role
+  from public.prank_admins pa
+  join auth.users u on u.id = pa.user_id
+  left join public.profiles p on p.user_id = pa.user_id
+  order by case pa.role when 'super' then 0 else 1 end, lower(coalesce(p.display_name, u.email));
+end;
+$$;
+
+revoke all on function public.admin_list_prank_admins() from public, anon;
+grant execute on function public.admin_list_prank_admins() to authenticated;
+
+-- =========================================================================
+-- Global couple leaderboards — cross-couple leaderboard RPCs. SECURITY
+-- DEFINER so they can aggregate across couples that the caller isn't
+-- directly a member of (couples/couple_members RLS restricts direct reads).
+-- =========================================================================
+
+-- Daily global leaderboard: one row per couple where BOTH members solved
+-- the given puzzle. Ranked by avg guesses asc, avg time asc.
+create or replace function public.get_global_daily_couple_leaderboard(p_puzzle_id uuid)
+returns table (
+  couple_id uuid,
+  theme_color text,
+  m1_user_id uuid,
+  m1_display_name text,
+  m1_guesses_used int,
+  m1_time_ms int,
+  m1_rows jsonb,
+  m2_user_id uuid,
+  m2_display_name text,
+  m2_guesses_used int,
+  m2_time_ms int,
+  m2_rows jsonb,
+  avg_guesses numeric,
+  avg_time_ms numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with paired as (
+    select
+      cm.couple_id,
+      pa.user_id,
+      pa.guesses_used,
+      pa.time_ms,
+      pa.rows,
+      pr.display_name,
+      row_number() over (partition by cm.couple_id order by pa.user_id) as rn
+    from public.couple_members cm
+    join public.puzzle_attempts pa
+      on pa.user_id = cm.user_id
+     and pa.puzzle_id = p_puzzle_id
+     and pa.finished = true
+     and pa.win = true
+    left join public.profiles pr on pr.user_id = pa.user_id
+  ),
+  qualified as (
+    select p.couple_id from paired p group by p.couple_id having count(*) = 2
+  )
+  select
+    c.id,
+    c.theme_color,
+    p1.user_id, p1.display_name, p1.guesses_used, p1.time_ms, p1.rows,
+    p2.user_id, p2.display_name, p2.guesses_used, p2.time_ms, p2.rows,
+    ((p1.guesses_used + p2.guesses_used) / 2.0)::numeric,
+    ((p1.time_ms + p2.time_ms) / 2.0)::numeric
+  from qualified q
+  join public.couples c on c.id = q.couple_id
+  join paired p1 on p1.couple_id = q.couple_id and p1.rn = 1
+  join paired p2 on p2.couple_id = q.couple_id and p2.rn = 2
+  order by ((p1.guesses_used + p2.guesses_used) / 2.0) asc,
+           ((p1.time_ms + p2.time_ms) / 2.0) asc;
+$$;
+
+grant execute on function public.get_global_daily_couple_leaderboard(uuid) to authenticated;
+
+-- Monthly global: ranks couples by lowest avg guesses across the overlap
+-- set (puzzles where BOTH members solved in the current Denver month).
+create or replace function public.get_global_monthly_couple_leaderboard(p_month_start date)
+returns table (
+  couple_id uuid,
+  theme_color text,
+  m1_user_id uuid,
+  m1_display_name text,
+  m2_user_id uuid,
+  m2_display_name text,
+  overlap_count int,
+  avg_guesses numeric,
+  avg_time_ms numeric,
+  best_guesses numeric,
+  best_time_ms numeric,
+  best_date date
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with
+  member_attempts as (
+    select
+      cm.couple_id,
+      cm.user_id,
+      pa.puzzle_id,
+      pa.guesses_used,
+      pa.time_ms,
+      pz.date as puzzle_date
+    from public.couple_members cm
+    join public.puzzle_attempts pa
+      on pa.user_id = cm.user_id
+     and pa.finished = true
+     and pa.win = true
+    join public.puzzles pz on pz.id = pa.puzzle_id
+    where pz.lane = 'classic' and pz.date >= p_month_start
+  ),
+  overlap as (
+    select
+      ma.couple_id,
+      ma.puzzle_id,
+      ma.puzzle_date,
+      sum(ma.guesses_used) as sum_guesses,
+      sum(ma.time_ms) as sum_time_ms
+    from member_attempts ma
+    group by ma.couple_id, ma.puzzle_id, ma.puzzle_date
+    having count(*) = 2
+  ),
+  couple_stats as (
+    select
+      o.couple_id,
+      count(*)::int as overlap_count,
+      (sum(o.sum_guesses) / (count(*) * 2.0))::numeric as avg_guesses,
+      (sum(o.sum_time_ms) / (count(*) * 2.0))::numeric as avg_time_ms
+    from overlap o
+    group by o.couple_id
+  ),
+  best as (
+    select distinct on (o.couple_id)
+      o.couple_id,
+      (o.sum_guesses / 2.0) as best_guesses,
+      (o.sum_time_ms / 2.0) as best_time_ms,
+      o.puzzle_date as best_date
+    from overlap o
+    order by o.couple_id, (o.sum_guesses / 2.0) asc, (o.sum_time_ms / 2.0) asc
+  ),
+  member_pair as (
+    select
+      cm.couple_id,
+      cm.user_id,
+      pr.display_name,
+      row_number() over (partition by cm.couple_id order by cm.user_id) as rn
+    from public.couple_members cm
+    left join public.profiles pr on pr.user_id = cm.user_id
+    where cm.couple_id in (select cs.couple_id from couple_stats cs)
+  )
+  select
+    c.id,
+    c.theme_color,
+    mp1.user_id, mp1.display_name,
+    mp2.user_id, mp2.display_name,
+    cs.overlap_count,
+    cs.avg_guesses,
+    cs.avg_time_ms,
+    b.best_guesses,
+    b.best_time_ms,
+    b.best_date
+  from couple_stats cs
+  join public.couples c on c.id = cs.couple_id
+  left join best b on b.couple_id = cs.couple_id
+  left join member_pair mp1 on mp1.couple_id = cs.couple_id and mp1.rn = 1
+  left join member_pair mp2 on mp2.couple_id = cs.couple_id and mp2.rn = 2
+  order by cs.avg_guesses asc, cs.avg_time_ms asc;
+$$;
+
+grant execute on function public.get_global_monthly_couple_leaderboard(date) to authenticated;

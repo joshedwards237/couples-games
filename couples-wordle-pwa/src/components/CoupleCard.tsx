@@ -13,7 +13,15 @@ import {
   DialogTitle
 } from '@/components/ui/dialog';
 import { useAuth } from '@/context/AuthContext';
-import { buildInviteUrl, createCouple, fetchMyCouple, leaveCouple } from '@/lib/couples';
+import {
+  buildInviteUrl,
+  createCouple,
+  fetchMyCouple,
+  leaveCouple,
+  updateCoupleThemeColor
+} from '@/lib/couples';
+import { COUPLE_COLOR_PALETTE, isValidHexColor, resolveCoupleColor } from '@/lib/coupleColors';
+import { cn } from '@/lib/utils';
 import type { MyCouple } from '@/lib/types';
 
 export function CoupleCard() {
@@ -212,6 +220,12 @@ export function CoupleCard() {
           <MemberTile label="Partner" name={partnerName} avatarUrl={partner?.avatarUrl ?? null} />
         )}
       </div>
+      <ThemeColorPicker
+        coupleId={couple.couple.id}
+        stored={couple.couple.themeColor}
+        onSaved={(color) => setCouple((c) => (c ? { ...c, couple: { ...c.couple, themeColor: color } } : c))}
+      />
+
       <Button
         variant="ghost"
         onClick={() => setConfirmLeaveOpen(true)}
@@ -292,6 +306,88 @@ function initialsFor(name: string): string {
     .slice(0, 2)
     .join('');
   return initials || '?';
+}
+
+function ThemeColorPicker({
+  coupleId,
+  stored,
+  onSaved
+}: {
+  coupleId: string;
+  stored: string | null;
+  onSaved: (color: string | null) => void;
+}) {
+  const resolved = resolveCoupleColor(coupleId, stored);
+  const [pending, setPending] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const effective = pending ?? stored;
+  const effectiveHex = isValidHexColor(effective) ? effective : resolved.color;
+
+  const save = async (next: string | null) => {
+    setPending(next ?? '');
+    setErr(null);
+    try {
+      await updateCoupleThemeColor(next);
+      onSaved(next);
+    } catch (e: any) {
+      console.error('save couple theme color failed', e);
+      setErr(e?.message ?? 'Could not save color');
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <div className="space-y-2 rounded-md bg-white/50 px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold">Couple theme</p>
+        {resolved.isDefault && !stored && (
+          <span className="text-[10px] uppercase tracking-wider text-textSecondary">auto</span>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {COUPLE_COLOR_PALETTE.map((c) => {
+          const selected = effectiveHex.toLowerCase() === c.toLowerCase();
+          return (
+            <button
+              key={c}
+              type="button"
+              aria-label={`Use ${c}`}
+              onClick={() => save(c)}
+              className={cn(
+                'h-6 w-6 rounded-full border-2 transition-transform',
+                selected ? 'scale-110 border-textPrimary' : 'border-white/70 hover:scale-105'
+              )}
+              style={{ backgroundColor: c }}
+            />
+          );
+        })}
+        <label
+          className="relative flex h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-dashed border-textSecondary/60 text-[10px] font-bold text-textSecondary"
+          title="Pick custom color"
+        >
+          <input
+            type="color"
+            value={effectiveHex}
+            onChange={(e) => save(e.target.value.toUpperCase())}
+            className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          />
+          <span aria-hidden="true">+</span>
+        </label>
+        {stored && (
+          <button
+            type="button"
+            onClick={() => save(null)}
+            className="ml-1 text-[10px] font-semibold uppercase tracking-wider text-textSecondary hover:text-textPrimary"
+          >
+            Reset
+          </button>
+        )}
+      </div>
+      {err && <p className="text-xs text-red-600">{err}</p>}
+    </div>
+  );
 }
 
 function MemberTile({

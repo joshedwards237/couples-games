@@ -39,7 +39,7 @@ export async function fetchMyCouple(userId: string): Promise<MyCouple | null> {
   const coupleId = (mine as { couple_id: string }).couple_id;
 
   const [{ data: couple, error: cErr }, { data: memberRows, error: rErr }] = await Promise.all([
-    supabase.from('couples').select('id, name, created_by, created_at').eq('id', coupleId).single(),
+    supabase.from('couples').select('id, name, created_by, created_at, theme_color').eq('id', coupleId).single(),
     supabase
       .from('couple_members')
       .select('couple_id, user_id, role, joined_at')
@@ -127,6 +127,12 @@ function normalizeCouple(row: any): Couple {
     id: row.id,
     name: (row.name as string | null) ?? null,
     createdBy: row.created_by,
-    createdAt: row.created_at
+    createdAt: row.created_at,
+    themeColor: (row.theme_color as string | null) ?? null
   };
+}
+
+export async function updateCoupleThemeColor(color: string | null): Promise<void> {
+  const { error } = await supabase.rpc('update_couple_theme_color', { p_color: color });
+  if (error) throw error;
 }

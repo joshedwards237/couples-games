@@ -106,6 +106,47 @@ export interface Couple {
   name: string | null;
   createdBy: string;
   createdAt: string;
+  /** Hex (`#RRGGBB`) picked by a member, or null to fall back to a deterministic default. */
+  themeColor: string | null;
+}
+
+export interface GlobalDailyCoupleMember {
+  userId: string;
+  displayName: string;
+  guessesUsed: number;
+  timeMs: number;
+  rows: string[];
+  evaluations: LetterEval[][];
+}
+
+export interface GlobalDailyCoupleEntry {
+  coupleId: string;
+  themeColor: string | null;
+  members: GlobalDailyCoupleMember[];
+  avgGuesses: number;
+  avgTimeMs: number;
+  isMine: boolean;
+}
+
+export interface GlobalMonthlyCoupleMember {
+  userId: string;
+  displayName: string;
+}
+
+export interface GlobalMonthlyCoupleEntry {
+  coupleId: string;
+  themeColor: string | null;
+  members: GlobalMonthlyCoupleMember[];
+  /** Count of puzzles this month where BOTH members solved. */
+  overlapCount: number;
+  avgGuesses: number;
+  avgTimeMs: number;
+  bestSolve: {
+    guesses: number;
+    timeMs: number;
+    date: string;
+  } | null;
+  isMine: boolean;
 }
 
 export interface CoupleMember {
