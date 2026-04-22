@@ -306,24 +306,30 @@ security definer
 volatile
 set search_path = public
 as $$
-  -- Insert today's puzzle if missing. Deterministic word selection per
-  -- (date, lane) so concurrent callers race safely — ON CONFLICT protects
-  -- the unique (date, lane) index.
+  -- Insert today's Denver-local puzzle if missing. Rolling at
+  -- America/Denver midnight keeps the daily aligned with the rest of
+  -- the app's day-sensitive logic (monthly leaderboard, streaks,
+  -- morning/night trophies). Deterministic word selection per
+  -- (denver_date, lane) so concurrent callers race safely — ON CONFLICT
+  -- protects the unique (date, lane) index.
   insert into public.puzzles (date, lane, word)
   select
-    (now() at time zone 'utc')::date,
+    (now() at time zone 'America/Denver')::date,
     p_lane,
     (
       select word
       from public.word_pool
-      order by md5(((now() at time zone 'utc')::date)::text || ':' || p_lane || word)
+      order by md5(
+        ((now() at time zone 'America/Denver')::date)::text
+        || ':' || p_lane || word
+      )
       limit 1
     )
   where p_lane in ('classic', 'couple')
     and not exists (
       select 1
       from public.puzzles
-      where date = (now() at time zone 'utc')::date
+      where date = (now() at time zone 'America/Denver')::date
         and lane = p_lane
     )
   on conflict (date, lane) do nothing;
@@ -332,7 +338,7 @@ as $$
   -- one a concurrent caller inserted, or a pre-existing one).
   select *
   from public.puzzles
-  where date = (now() at time zone 'utc')::date
+  where date = (now() at time zone 'America/Denver')::date
     and lane = p_lane;
 $$;
 
