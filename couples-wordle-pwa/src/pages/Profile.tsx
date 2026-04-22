@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Check, Trophy, X } from 'lucide-react';
+import { Check, Loader2, Trophy, X } from 'lucide-react';
 import { Layout } from '@/components/Layout';
 import { StreakCard } from '@/components/StreakCard';
 import { CoupleCard } from '@/components/CoupleCard';
@@ -353,7 +353,14 @@ function UpdatesCard() {
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={handleCheck} disabled={busy}>
-          {busy ? 'Checking\u2026' : 'Check for updates'}
+          {busy ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              Updating\u2026
+            </span>
+          ) : (
+            'Check for updates'
+          )}
         </Button>
       </div>
       {status && <p className="text-xs text-textSecondary">{status}</p>}

@@ -9,6 +9,7 @@ import { CompletedBoard } from '@/components/CompletedBoard';
 import { Layout } from '@/components/Layout';
 import { InstallPrompt } from '@/components/InstallPrompt';
 import { InviteBanner } from '@/components/InviteBanner';
+import { HomeCoupleInviteCTA } from '@/components/HomeCoupleInviteCTA';
 import { Leaderboard } from '@/components/Leaderboard';
 import { MonthlyLeaderboard } from '@/components/MonthlyLeaderboard';
 import { PwaUpdatePrompt } from '@/components/PwaUpdatePrompt';
@@ -181,6 +182,8 @@ function Home() {
   const [monthlyLoading, setMonthlyLoading] = useState(true);
   const [globalDaily, setGlobalDaily] = useState<GlobalDailyCoupleEntry[]>([]);
   const [globalMonthly, setGlobalMonthly] = useState<GlobalMonthlyCoupleEntry[]>([]);
+  // Bumped when a partner joins via InviteBanner so the CTA re-reads couple state.
+  const [coupleRefresh, setCoupleRefresh] = useState(0);
   const [finishedToday, setFinishedToday] = useState(false);
   const [bonusAvailable, setBonusAvailable] = useState(false);
   const [bonusFinished, setBonusFinished] = useState(false);
@@ -246,7 +249,7 @@ function Home() {
   return (
     <Layout>
       <section className="space-y-6">
-        <InviteBanner />
+        <InviteBanner onJoined={() => setCoupleRefresh((n) => n + 1)} />
 
         <div className="flex flex-col items-center gap-3 py-6">
           <Button size="xl" onClick={() => navigate('/play/classic')} className="min-w-[220px]">
@@ -263,6 +266,8 @@ function Home() {
             </Button>
           )}
         </div>
+
+        <HomeCoupleInviteCTA refreshKey={coupleRefresh} />
 
         <Leaderboard
           entries={leaderboard}

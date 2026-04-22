@@ -79,7 +79,6 @@ export function MonthlyLeaderboard({ entries, globalCoupleEntries = [], loading 
                   </Avatar>
                   <p className="min-w-0 flex-1 truncate font-semibold">
                     {entry.displayName || 'Player'}
-                    {entry.isYou && <span className="ml-1 text-xs text-accent">(you)</span>}
                   </p>
                   <span className="shrink-0 text-sm tabular-nums text-textSecondary">
                     {entry.wins} {entry.wins === 1 ? 'win' : 'wins'}

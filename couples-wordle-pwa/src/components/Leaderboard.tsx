@@ -162,7 +162,6 @@ export function Leaderboard({ entries, globalCoupleEntries = [], loading, puzzle
                       bot
                     </span>
                   )}
-                  {entry.isYou && <span className="ml-1 text-xs text-accent">(you)</span>}
                   {todayWinners.has(entry.userId) && (
                     <span
                       className="ml-1 inline-flex items-center rounded-full bg-accent/15 px-1.5 py-0.5 align-middle text-accent"

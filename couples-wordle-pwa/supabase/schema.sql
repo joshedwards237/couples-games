@@ -24,7 +24,9 @@ create table if not exists public.profiles (
 );
 
 create or replace function public.tg_profiles_set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin
   new.updated_at := now();
   return new;
@@ -91,11 +93,11 @@ create table if not exists public.word_pool (
 
 alter table public.word_pool enable row level security;
 
+-- No policies: word_pool is only accessed via SECURITY DEFINER RPCs
+-- (get_daily_puzzle, admin_create_bonus_puzzle), which run as the
+-- function owner and bypass RLS. Direct API reads are intentionally denied.
 drop policy if exists "word_pool readable by authenticated" on public.word_pool;
-create policy "word_pool readable by authenticated"
-  on public.word_pool for select
-  to authenticated
-  using (true);
+revoke all on public.word_pool from anon, authenticated;
 
 -- =========================================================================
 -- puzzles (additive — tolerates pre-existing table from older setup)
@@ -103,7 +105,7 @@ create policy "word_pool readable by authenticated"
 create table if not exists public.puzzles (
   id uuid primary key default gen_random_uuid(),
   date date not null,
-  lane text not null check (lane in ('classic', 'couple')),
+  lane text not null check (lane in ('classic', 'bonus')),
   word text not null,
   created_at timestamptz not null default now()
 );
@@ -174,7 +176,7 @@ begin
   if not exists (
     select 1 from pg_constraint where conname = 'puzzle_attempts_lane_check'
   ) then
-    alter table public.puzzle_attempts add constraint puzzle_attempts_lane_check check (lane in ('classic', 'couple'));
+    alter table public.puzzle_attempts add constraint puzzle_attempts_lane_check check (lane in ('classic', 'bonus'));
   end if;
   if not exists (
     select 1 from pg_constraint where conname = 'puzzle_attempts_mode_check'
@@ -252,7 +254,9 @@ create index if not exists puzzle_attempts_puzzle_idx on public.puzzle_attempts 
 create index if not exists puzzle_attempts_user_idx on public.puzzle_attempts (user_id, created_at desc);
 
 create or replace function public.tg_attempts_set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin
   new.updated_at := now();
   return new;
@@ -306,24 +310,30 @@ security definer
 volatile
 set search_path = public
 as $$
-  -- Insert today's puzzle if missing. Deterministic word selection per
-  -- (date, lane) so concurrent callers race safely — ON CONFLICT protects
-  -- the unique (date, lane) index.
+  -- Insert today's Denver-local puzzle if missing. Rolling at
+  -- America/Denver midnight keeps the daily aligned with the rest of
+  -- the app's day-sensitive logic (monthly leaderboard, streaks,
+  -- morning/night trophies). Deterministic word selection per
+  -- (denver_date, lane) so concurrent callers race safely — ON CONFLICT
+  -- protects the unique (date, lane) index.
   insert into public.puzzles (date, lane, word)
   select
-    (now() at time zone 'utc')::date,
+    (now() at time zone 'America/Denver')::date,
     p_lane,
     (
       select word
       from public.word_pool
-      order by md5(((now() at time zone 'utc')::date)::text || ':' || p_lane || word)
+      order by md5(
+        ((now() at time zone 'America/Denver')::date)::text
+        || ':' || p_lane || word
+      )
       limit 1
     )
-  where p_lane in ('classic', 'couple')
+  where p_lane = 'classic'
     and not exists (
       select 1
       from public.puzzles
-      where date = (now() at time zone 'utc')::date
+      where date = (now() at time zone 'America/Denver')::date
         and lane = p_lane
     )
   on conflict (date, lane) do nothing;
@@ -332,7 +342,7 @@ as $$
   -- one a concurrent caller inserted, or a pre-existing one).
   select *
   from public.puzzles
-  where date = (now() at time zone 'utc')::date
+  where date = (now() at time zone 'America/Denver')::date
     and lane = p_lane;
 $$;
 
@@ -580,6 +590,10 @@ security definer
 volatile
 set search_path = public
 as $$
+  -- Postgres CTE visibility: a trailing SELECT against the base table does
+  -- NOT see rows inserted by a data-modifying CTE in the same statement.
+  -- Return from the `new_couple` CTE directly; guarded on `enrolled` so we
+  -- only emit when the couple_members row was also written.
   with new_couple as (
     insert into public.couples (name, created_by)
     select nullif(trim(p_name), ''), auth.uid()
@@ -594,9 +608,8 @@ as $$
     select id, auth.uid(), 'creator' from new_couple
     returning couple_id
   )
-  select c.*
-  from public.couples c
-  where c.id in (select id from new_couple);
+  select nc.* from new_couple nc
+  where (select count(*) from enrolled) > 0;
 $$;
 
 grant execute on function public.create_couple(text) to authenticated;
@@ -738,7 +751,9 @@ create table if not exists public.prank_config (
 );
 
 create or replace function public.tg_prank_config_set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin
   new.updated_at := now();
   return new;
@@ -1913,7 +1928,7 @@ declare
   v_sub3 int;
   v_best_ms bigint;
   v_current_streak int := 0;
-  v_today date := (now() at time zone 'utc')::date;
+  v_today date := (now() at time zone 'America/Denver')::date;
   v_cursor date;
   v_has_win boolean;
   v_morning int;
@@ -2001,7 +2016,9 @@ create index if not exists push_subscriptions_user_idx
   on public.push_subscriptions(user_id);
 
 create or replace function public.tg_push_subs_set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin new.updated_at := now(); return new; end;
 $$;
 
@@ -2064,22 +2081,22 @@ select cron.schedule(
 
 -- =========================================================================
 -- Bonus Wordle — admin can fire an extra daily puzzle for all users.
--- - New lane value 'bonus' alongside classic/couple.
+-- - New lane value 'bonus' alongside classic.
 -- - RPC creates at most one bonus per UTC day, returns only id+date so
 --   the admin never sees the generated word.
 -- - Trophy gating: per-puzzle trophies fire for bonus attempts, but
---   streaks / volume / periodic / couple-streak awards are suppressed,
---   and their lookback queries filter out lane='bonus' so bonus wins
---   never pad a day the user didn't play classic/couple.
+--   streaks / volume / periodic awards are suppressed, and their
+--   lookback queries filter out lane='bonus' so bonus wins never pad
+--   a day the user didn't play classic.
 -- =========================================================================
 
 alter table public.puzzles drop constraint if exists puzzles_lane_check;
 alter table public.puzzles add constraint puzzles_lane_check
-  check (lane in ('classic','couple','bonus'));
+  check (lane in ('classic','bonus'));
 
 alter table public.puzzle_attempts drop constraint if exists puzzle_attempts_lane_check;
 alter table public.puzzle_attempts add constraint puzzle_attempts_lane_check
-  check (lane in ('classic','couple','bonus'));
+  check (lane in ('classic','bonus'));
 
 create or replace function public.admin_create_bonus_puzzle()
 returns table (id uuid, date date)
@@ -2088,7 +2105,7 @@ security definer
 set search_path = public
 as $$
 declare
-  v_today date := (now() at time zone 'utc')::date;
+  v_today date := (now() at time zone 'America/Denver')::date;
   v_today_classic text;
   v_word text;
   v_existing uuid;
@@ -2566,59 +2583,6 @@ begin
   end if;
 end;
 $$;
-
--- =========================================================================
--- Remove the 'couple' lane (unused in this build) and narrow streaks to
--- classic-only. Total solves stays classic+bonus. H2H tiebreak gains a
--- created_at step so every shared puzzle picks a winner.
--- =========================================================================
-delete from public.trophies
-where puzzle_id in (select id from public.puzzles where lane = 'couple');
-delete from public.puzzle_attempts
-where puzzle_id in (select id from public.puzzles where lane = 'couple');
-delete from public.puzzles where lane = 'couple';
-
-alter table public.puzzles drop constraint if exists puzzles_lane_check;
-alter table public.puzzles add constraint puzzles_lane_check
-  check (lane in ('classic','bonus'));
-alter table public.puzzle_attempts drop constraint if exists puzzle_attempts_lane_check;
-alter table public.puzzle_attempts add constraint puzzle_attempts_lane_check
-  check (lane in ('classic','bonus'));
-
-drop function if exists public.get_daily_puzzle(text);
-create or replace function public.get_daily_puzzle(p_lane text)
-returns setof public.puzzles
-language sql
-security definer
-volatile
-set search_path = public
-as $get_daily$
-  insert into public.puzzles (date, lane, word)
-  select
-    (now() at time zone 'utc')::date,
-    p_lane,
-    (
-      select word
-      from public.word_pool
-      order by md5(((now() at time zone 'utc')::date)::text || ':' || p_lane || word)
-      limit 1
-    )
-  where p_lane = 'classic'
-    and not exists (
-      select 1
-      from public.puzzles
-      where date = (now() at time zone 'utc')::date
-        and lane = p_lane
-    )
-  on conflict (date, lane) do nothing;
-
-  select *
-  from public.puzzles
-  where date = (now() at time zone 'utc')::date
-    and lane = p_lane;
-$get_daily$;
-
-grant execute on function public.get_daily_puzzle(text) to authenticated;
 
 create or replace function public.award_trophies_for_attempt(p_attempt_id uuid)
 returns void
@@ -3444,3 +3408,128 @@ as $$
 $$;
 
 grant execute on function public.get_global_monthly_couple_leaderboard(date) to authenticated;
+
+-- =========================================================================
+-- Admin user management RPCs (app-admin only). Used by the Users card on
+-- the /admin page. Self-demote and self-delete blocked.
+-- =========================================================================
+
+create or replace function public.admin_list_users()
+returns table (
+  user_id uuid,
+  email text,
+  display_name text,
+  avatar_url text,
+  created_at timestamptz,
+  is_app_admin boolean,
+  is_prank_admin boolean,
+  couple_id uuid,
+  couple_name text,
+  couple_theme_color text,
+  partner_user_id uuid,
+  partner_display_name text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null or not public.is_app_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+
+  return query
+  with my_couples as (
+    select cm.user_id, cm.couple_id from public.couple_members cm
+  ),
+  partners as (
+    select
+      me.user_id,
+      other.user_id as partner_user_id,
+      pp.display_name as partner_display_name
+    from my_couples me
+    left join my_couples other
+      on other.couple_id = me.couple_id and other.user_id <> me.user_id
+    left join public.profiles pp on pp.user_id = other.user_id
+  )
+  select
+    u.id,
+    u.email::text,
+    coalesce(p.display_name, '')::text,
+    coalesce(p.avatar_url, '')::text,
+    u.created_at,
+    (aa.user_id is not null),
+    (pa.user_id is not null),
+    c.id,
+    c.name,
+    c.theme_color,
+    pt.partner_user_id,
+    pt.partner_display_name::text
+  from auth.users u
+  left join public.profiles p on p.user_id = u.id
+  left join public.app_admins aa on aa.user_id = u.id
+  left join public.prank_admins pa on pa.user_id = u.id
+  left join my_couples mc on mc.user_id = u.id
+  left join public.couples c on c.id = mc.couple_id
+  left join partners pt on pt.user_id = u.id
+  order by u.created_at desc;
+end;
+$$;
+
+revoke all on function public.admin_list_users() from public, anon;
+grant execute on function public.admin_list_users() to authenticated;
+
+create or replace function public.admin_set_app_admin_role(p_user_id uuid, p_enabled boolean)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or not public.is_app_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+  if p_user_id = auth.uid() and p_enabled = false then
+    raise exception 'cannot demote yourself';
+  end if;
+  if p_enabled then
+    insert into public.app_admins (user_id) values (p_user_id)
+    on conflict (user_id) do nothing;
+  else
+    delete from public.app_admins where user_id = p_user_id;
+  end if;
+end;
+$$;
+
+revoke all on function public.admin_set_app_admin_role(uuid, boolean) from public, anon;
+grant execute on function public.admin_set_app_admin_role(uuid, boolean) to authenticated;
+
+create or replace function public.admin_set_prank_admin_role(p_user_id uuid, p_enabled boolean)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or not public.is_app_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+  if p_enabled then
+    insert into public.prank_admins (user_id) values (p_user_id)
+    on conflict (user_id) do nothing;
+  else
+    delete from public.prank_admins where user_id = p_user_id;
+  end if;
+end;
+$$;
+
+revoke all on function public.admin_set_prank_admin_role(uuid, boolean) from public, anon;
+grant execute on function public.admin_set_prank_admin_role(uuid, boolean) to authenticated;
+
+create or replace function public.admin_delete_user(p_user_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null or not public.is_app_admin(auth.uid()) then
+    raise exception 'not authorized';
+  end if;
+  if p_user_id = auth.uid() then
+    raise exception 'cannot delete yourself';
+  end if;
+  delete from auth.users where id = p_user_id;
+end;
+$$;
+
+revoke all on function public.admin_delete_user(uuid) from public, anon;
+grant execute on function public.admin_delete_user(uuid) to authenticated;
