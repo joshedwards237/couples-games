@@ -24,7 +24,9 @@ create table if not exists public.profiles (
 );
 
 create or replace function public.tg_profiles_set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin
   new.updated_at := now();
   return new;
@@ -91,11 +93,11 @@ create table if not exists public.word_pool (
 
 alter table public.word_pool enable row level security;
 
+-- No policies: word_pool is only accessed via SECURITY DEFINER RPCs
+-- (get_daily_puzzle, admin_create_bonus_puzzle), which run as the
+-- function owner and bypass RLS. Direct API reads are intentionally denied.
 drop policy if exists "word_pool readable by authenticated" on public.word_pool;
-create policy "word_pool readable by authenticated"
-  on public.word_pool for select
-  to authenticated
-  using (true);
+revoke all on public.word_pool from anon, authenticated;
 
 -- =========================================================================
 -- puzzles (additive — tolerates pre-existing table from older setup)
@@ -103,7 +105,7 @@ create policy "word_pool readable by authenticated"
 create table if not exists public.puzzles (
   id uuid primary key default gen_random_uuid(),
   date date not null,
-  lane text not null check (lane in ('classic', 'couple')),
+  lane text not null check (lane in ('classic', 'bonus')),
   word text not null,
   created_at timestamptz not null default now()
 );
@@ -174,7 +176,7 @@ begin
   if not exists (
     select 1 from pg_constraint where conname = 'puzzle_attempts_lane_check'
   ) then
-    alter table public.puzzle_attempts add constraint puzzle_attempts_lane_check check (lane in ('classic', 'couple'));
+    alter table public.puzzle_attempts add constraint puzzle_attempts_lane_check check (lane in ('classic', 'bonus'));
   end if;
   if not exists (
     select 1 from pg_constraint where conname = 'puzzle_attempts_mode_check'
@@ -252,7 +254,9 @@ create index if not exists puzzle_attempts_puzzle_idx on public.puzzle_attempts 
 create index if not exists puzzle_attempts_user_idx on public.puzzle_attempts (user_id, created_at desc);
 
 create or replace function public.tg_attempts_set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin
   new.updated_at := now();
   return new;
@@ -325,7 +329,7 @@ as $$
       )
       limit 1
     )
-  where p_lane in ('classic', 'couple')
+  where p_lane = 'classic'
     and not exists (
       select 1
       from public.puzzles
@@ -747,7 +751,9 @@ create table if not exists public.prank_config (
 );
 
 create or replace function public.tg_prank_config_set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin
   new.updated_at := now();
   return new;
@@ -1922,7 +1928,7 @@ declare
   v_sub3 int;
   v_best_ms bigint;
   v_current_streak int := 0;
-  v_today date := (now() at time zone 'utc')::date;
+  v_today date := (now() at time zone 'America/Denver')::date;
   v_cursor date;
   v_has_win boolean;
   v_morning int;
@@ -2010,7 +2016,9 @@ create index if not exists push_subscriptions_user_idx
   on public.push_subscriptions(user_id);
 
 create or replace function public.tg_push_subs_set_updated_at()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin new.updated_at := now(); return new; end;
 $$;
 
@@ -2073,22 +2081,22 @@ select cron.schedule(
 
 -- =========================================================================
 -- Bonus Wordle — admin can fire an extra daily puzzle for all users.
--- - New lane value 'bonus' alongside classic/couple.
+-- - New lane value 'bonus' alongside classic.
 -- - RPC creates at most one bonus per UTC day, returns only id+date so
 --   the admin never sees the generated word.
 -- - Trophy gating: per-puzzle trophies fire for bonus attempts, but
---   streaks / volume / periodic / couple-streak awards are suppressed,
---   and their lookback queries filter out lane='bonus' so bonus wins
---   never pad a day the user didn't play classic/couple.
+--   streaks / volume / periodic awards are suppressed, and their
+--   lookback queries filter out lane='bonus' so bonus wins never pad
+--   a day the user didn't play classic.
 -- =========================================================================
 
 alter table public.puzzles drop constraint if exists puzzles_lane_check;
 alter table public.puzzles add constraint puzzles_lane_check
-  check (lane in ('classic','couple','bonus'));
+  check (lane in ('classic','bonus'));
 
 alter table public.puzzle_attempts drop constraint if exists puzzle_attempts_lane_check;
 alter table public.puzzle_attempts add constraint puzzle_attempts_lane_check
-  check (lane in ('classic','couple','bonus'));
+  check (lane in ('classic','bonus'));
 
 create or replace function public.admin_create_bonus_puzzle()
 returns table (id uuid, date date)
@@ -2097,7 +2105,7 @@ security definer
 set search_path = public
 as $$
 declare
-  v_today date := (now() at time zone 'utc')::date;
+  v_today date := (now() at time zone 'America/Denver')::date;
   v_today_classic text;
   v_word text;
   v_existing uuid;
@@ -2575,59 +2583,6 @@ begin
   end if;
 end;
 $$;
-
--- =========================================================================
--- Remove the 'couple' lane (unused in this build) and narrow streaks to
--- classic-only. Total solves stays classic+bonus. H2H tiebreak gains a
--- created_at step so every shared puzzle picks a winner.
--- =========================================================================
-delete from public.trophies
-where puzzle_id in (select id from public.puzzles where lane = 'couple');
-delete from public.puzzle_attempts
-where puzzle_id in (select id from public.puzzles where lane = 'couple');
-delete from public.puzzles where lane = 'couple';
-
-alter table public.puzzles drop constraint if exists puzzles_lane_check;
-alter table public.puzzles add constraint puzzles_lane_check
-  check (lane in ('classic','bonus'));
-alter table public.puzzle_attempts drop constraint if exists puzzle_attempts_lane_check;
-alter table public.puzzle_attempts add constraint puzzle_attempts_lane_check
-  check (lane in ('classic','bonus'));
-
-drop function if exists public.get_daily_puzzle(text);
-create or replace function public.get_daily_puzzle(p_lane text)
-returns setof public.puzzles
-language sql
-security definer
-volatile
-set search_path = public
-as $get_daily$
-  insert into public.puzzles (date, lane, word)
-  select
-    (now() at time zone 'utc')::date,
-    p_lane,
-    (
-      select word
-      from public.word_pool
-      order by md5(((now() at time zone 'utc')::date)::text || ':' || p_lane || word)
-      limit 1
-    )
-  where p_lane = 'classic'
-    and not exists (
-      select 1
-      from public.puzzles
-      where date = (now() at time zone 'utc')::date
-        and lane = p_lane
-    )
-  on conflict (date, lane) do nothing;
-
-  select *
-  from public.puzzles
-  where date = (now() at time zone 'utc')::date
-    and lane = p_lane;
-$get_daily$;
-
-grant execute on function public.get_daily_puzzle(text) to authenticated;
 
 create or replace function public.award_trophies_for_attempt(p_attempt_id uuid)
 returns void
