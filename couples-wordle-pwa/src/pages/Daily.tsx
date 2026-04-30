@@ -180,7 +180,7 @@ export default function Daily() {
               </span>
             ) : isIOS ? (
               <span>
-                Tap <span aria-hidden>⋯</span> &rarr; <strong>Open in Safari</strong> to add this to your home screen
+                <strong>Open in Safari</strong> to add this to your home screen
               </span>
             ) : (
               <span>
