@@ -162,6 +162,12 @@ export default function Daily() {
       }
       return;
     }
+    // On iOS, navigator.share() opens the *system* share sheet, which
+    // omits Safari's "Add to Home Screen" / "Add Bookmark" / etc. The
+    // hint copy already tells the user to tap Safari's own share
+    // button, so calling navigator.share() here would just show the
+    // wrong sheet. Skip the fallback on iOS entirely.
+    if (isIOS) return;
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
       try {
         await navigator.share({
