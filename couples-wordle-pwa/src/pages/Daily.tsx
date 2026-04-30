@@ -25,6 +25,16 @@ function detectIOS(): boolean {
   return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 }
 
+function detectIOSSafari(): boolean {
+  if (typeof window === 'undefined') return false;
+  const ua = window.navigator.userAgent;
+  if (!/iphone|ipad|ipod/i.test(ua)) return false;
+  // CriOS = Chrome, FxiOS = Firefox, EdgiOS = Edge, OPiOS = Opera,
+  // YaBrowser = Yandex, FBAN/FBAV = Facebook, Instagram/Line/Twitter
+  // are all WebKit shells where iOS A2HS share-menu doesn't surface.
+  return !/CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|FBAN|FBAV|Instagram|Line|Twitter/i.test(ua);
+}
+
 const A2HS_DISMISSED_KEY = 'daily:a2hs-dismissed';
 
 function wasA2HSDismissed(): boolean {
@@ -98,6 +108,7 @@ export default function Daily() {
   });
 
   const isIOS = detectIOS();
+  const isIOSSafari = detectIOSSafari();
 
   const handleHintAction = async () => {
     const evt = installEvtRef.current;
@@ -153,7 +164,7 @@ export default function Daily() {
 
       {showA2HS && (
         <div
-          className="fixed left-1/2 -translate-x-1/2 max-w-[20rem] rounded-2xl bg-brand-hunter/95 text-white text-xs shadow-lg backdrop-blur flex items-stretch overflow-hidden"
+          className="fixed left-1/2 -translate-x-1/2 w-[min(calc(100vw-1.5rem),28rem)] rounded-2xl bg-brand-hunter/95 text-white text-sm shadow-lg backdrop-blur flex items-stretch overflow-hidden"
           style={{ bottom: 'max(1rem, env(safe-area-inset-bottom))' }}
           role="dialog"
           aria-label="Add to Home Screen hint"
@@ -163,9 +174,13 @@ export default function Daily() {
             onClick={handleHintAction}
             className="flex-1 px-4 py-3 text-left active:bg-white/10"
           >
-            {isIOS ? (
+            {isIOSSafari ? (
               <span>
-                Tap <span aria-hidden>⬆️</span> Share &rarr; <strong>Add to Home Screen</strong> for a faster scan
+                Tap <span aria-hidden>⬆️</span> Share &rarr; <strong>Add to Home Screen</strong>
+              </span>
+            ) : isIOS ? (
+              <span>
+                Tap <span aria-hidden>⋯</span> &rarr; <strong>Open in Safari</strong> to add this to your home screen
               </span>
             ) : (
               <span>
