@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -62,10 +64,21 @@ export function PwaUpdatePrompt() {
     }
   });
 
+  const [reloading, setReloading] = useState(false);
+
   if (!needRefresh) return null;
 
   const handleReload = () => {
+    if (reloading) return;
+    setReloading(true);
     void updateServiceWorker(true);
+    // vite-plugin-pwa relies on `controllerchange` to trigger the reload,
+    // but Chrome occasionally fails to fire it (no SW was waiting, or the
+    // controller was already this version). Force a reload after a short
+    // grace period so the spinner never spins forever.
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 1500);
   };
 
   return (
@@ -82,11 +95,22 @@ export function PwaUpdatePrompt() {
         <p className="text-sm font-semibold">New version available</p>
         <p className="text-xs text-textSecondary">Reload to get the latest fixes.</p>
       </div>
-      <Button variant="ghost" size="sm" onClick={() => setNeedRefresh(false)}>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setNeedRefresh(false)}
+        disabled={reloading}
+      >
         Later
       </Button>
-      <Button size="sm" onClick={handleReload}>
-        Reload
+      <Button
+        size="sm"
+        onClick={handleReload}
+        disabled={reloading}
+        aria-label={reloading ? 'Reloading' : 'Reload'}
+        className="min-w-[72px]"
+      >
+        {reloading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Reload'}
       </Button>
     </div>
   );

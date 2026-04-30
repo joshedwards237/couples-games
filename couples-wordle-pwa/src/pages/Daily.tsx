@@ -1,10 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchDailyQuote, type DailyQuote } from '@/lib/dailyQuote';
 
 const FALLBACK: DailyQuote = {
   id: 'fallback',
   text: 'Today is a good day to be exactly where you are.',
   attribution: null
+};
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 };
 
 function detectStandalone(): boolean {
@@ -24,6 +29,7 @@ export default function Daily() {
   const [quote, setQuote] = useState<DailyQuote | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [showA2HS, setShowA2HS] = useState(false);
+  const installEvtRef = useRef<BeforeInstallPromptEvent | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,10 +51,23 @@ export default function Daily() {
   }, []);
 
   useEffect(() => {
-    if (!detectStandalone()) {
-      const t = window.setTimeout(() => setShowA2HS(true), 800);
-      return () => window.clearTimeout(t);
-    }
+    if (detectStandalone()) return;
+    const t = window.setTimeout(() => setShowA2HS(true), 800);
+    const onBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      installEvtRef.current = e as BeforeInstallPromptEvent;
+    };
+    const onInstalled = () => {
+      installEvtRef.current = null;
+      setShowA2HS(false);
+    };
+    window.addEventListener('beforeinstallprompt', onBeforeInstall);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('beforeinstallprompt', onBeforeInstall);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
   }, []);
 
   const today = new Date().toLocaleDateString(undefined, {
@@ -58,6 +77,31 @@ export default function Daily() {
   });
 
   const isIOS = detectIOS();
+
+  const handleHintAction = async () => {
+    const evt = installEvtRef.current;
+    if (evt) {
+      try {
+        await evt.prompt();
+        const choice = await evt.userChoice;
+        if (choice.outcome === 'accepted') setShowA2HS(false);
+        installEvtRef.current = null;
+      } catch {
+        /* swallow — user can dismiss via X */
+      }
+      return;
+    }
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: 'Daily Quote',
+          url: window.location.href
+        });
+      } catch {
+        /* user cancelled share sheet — leave hint visible */
+      }
+    }
+  };
 
   return (
     <div
@@ -87,23 +131,36 @@ export default function Daily() {
       </div>
 
       {showA2HS && (
-        <button
-          type="button"
-          onClick={() => setShowA2HS(false)}
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 max-w-[20rem] rounded-2xl bg-brand-hunter/95 text-white text-xs px-4 py-3 shadow-lg backdrop-blur transition-opacity duration-500 active:opacity-70"
+        <div
+          className="fixed left-1/2 -translate-x-1/2 max-w-[20rem] rounded-2xl bg-brand-hunter/95 text-white text-xs shadow-lg backdrop-blur flex items-stretch overflow-hidden"
           style={{ bottom: 'max(1rem, env(safe-area-inset-bottom))' }}
-          aria-label="Dismiss add-to-home-screen hint"
+          role="dialog"
+          aria-label="Add to Home Screen hint"
         >
-          {isIOS ? (
-            <span>
-              Tap <span aria-hidden>⬆️</span> Share &rarr; <strong>Add to Home Screen</strong> for a faster scan
-            </span>
-          ) : (
-            <span>
-              Tap your browser menu &rarr; <strong>Install app</strong> for a faster scan
-            </span>
-          )}
-        </button>
+          <button
+            type="button"
+            onClick={handleHintAction}
+            className="flex-1 px-4 py-3 text-left active:bg-white/10"
+          >
+            {isIOS ? (
+              <span>
+                Tap <span aria-hidden>⬆️</span> Share &rarr; <strong>Add to Home Screen</strong> for a faster scan
+              </span>
+            ) : (
+              <span>
+                Tap to <strong>install this page</strong> for a faster scan
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowA2HS(false)}
+            aria-label="Dismiss hint"
+            className="px-3 py-3 border-l border-white/15 active:bg-white/10 text-white/80 hover:text-white"
+          >
+            <span aria-hidden className="text-base leading-none">×</span>
+          </button>
+        </div>
       )}
     </div>
   );
