@@ -37,6 +37,42 @@ function detectIOSSafari(): boolean {
 
 const A2HS_DISMISSED_KEY = 'daily:a2hs-dismissed';
 
+function IosShareIcon(props: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 16 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={props.className}
+    >
+      <path d="M3 8v9a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V8" />
+      <path d="M8 1v12" />
+      <path d="M5 4l3-3 3 3" />
+    </svg>
+  );
+}
+
+function IosPlusIcon(props: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      aria-hidden
+      className={props.className}
+    >
+      <path d="M8 3v10" />
+      <path d="M3 8h10" />
+    </svg>
+  );
+}
+
 function wasA2HSDismissed(): boolean {
   if (typeof window === 'undefined') return false;
   try {
@@ -175,8 +211,13 @@ export default function Daily() {
             className="flex-1 px-4 py-3 text-left active:bg-white/10"
           >
             {isIOSSafari ? (
-              <span>
-                Tap <span aria-hidden>⬆️</span> Share &rarr; <strong>Add to Home Screen</strong>
+              <span className="inline-flex items-center gap-1.5 flex-wrap">
+                Tap
+                <IosShareIcon className="h-4 w-4 inline-block" />
+                Share
+                <span aria-hidden>&rarr;</span>
+                <IosPlusIcon className="h-3.5 w-3.5 inline-block" />
+                <strong>Add to Home Screen</strong>
               </span>
             ) : isIOS ? (
               <span>
