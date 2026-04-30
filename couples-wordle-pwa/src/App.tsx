@@ -43,6 +43,7 @@ import { Profile } from '@/pages/Profile';
 import { PrankDashboard } from '@/pages/PrankDashboard';
 import { AdminPanel } from '@/pages/AdminPanel';
 import { UserProfile } from '@/pages/UserProfile';
+import Daily from '@/pages/Daily';
 
 // Captured synchronously at module load — before any child useEffect runs.
 // Ordering matters: React fires useEffects child-first, so if this lived in
@@ -69,6 +70,7 @@ export default function App() {
       <PrankProvider>
         <Routes>
           <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/daily" element={<Daily />} />
           <Route
             path="/"
             element={
