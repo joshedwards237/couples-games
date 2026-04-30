@@ -46,12 +46,13 @@ function IosShareIcon(props: { className?: string }) {
       strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
+      preserveAspectRatio="xMidYMid meet"
       aria-hidden
       className={props.className}
     >
-      <path d="M7 11v8a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-8" />
+      <path d="M5 11v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8" />
       <path d="M12 3v13" />
-      <path d="M8 7l4-4 4 4" />
+      <path d="M7 8l5-5 5 5" />
     </svg>
   );
 }
