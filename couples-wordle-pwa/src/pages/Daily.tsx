@@ -214,30 +214,34 @@ export default function Daily() {
           role="dialog"
           aria-label="Add to Home Screen hint"
         >
-          <button
-            type="button"
-            onClick={handleHintAction}
-            className="flex-1 px-4 py-3 text-left active:bg-white/10"
-          >
-            {isIOSSafari ? (
-              <span className="inline-flex items-center gap-1.5 flex-wrap">
-                Tap
-                <IosShareIcon className="h-[1.1em] w-[1.1em] shrink-0 inline-block" />
-                Share
-                <span aria-hidden>&rarr;</span>
-                <IosAddToHomeIcon className="h-[1.1em] w-[1.1em] shrink-0 inline-block" />
-                <strong>Add to Home Screen</strong>
-              </span>
-            ) : isIOS ? (
-              <span>
-                <strong>Open in Safari</strong> to add this to your home screen
-              </span>
-            ) : (
+          {isIOS ? (
+            <div className="flex-1 px-4 py-3 text-left select-none">
+              {isIOSSafari ? (
+                <span className="inline-flex items-center gap-1.5 flex-wrap">
+                  Tap
+                  <IosShareIcon className="h-[1.1em] w-[1.1em] shrink-0 inline-block" />
+                  Share
+                  <span aria-hidden>&rarr;</span>
+                  <IosAddToHomeIcon className="h-[1.1em] w-[1.1em] shrink-0 inline-block" />
+                  <strong>Add to Home Screen</strong>
+                </span>
+              ) : (
+                <span>
+                  <strong>Open in Safari</strong> to add this to your home screen
+                </span>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleHintAction}
+              className="flex-1 px-4 py-3 text-left active:bg-white/10"
+            >
               <span>
                 Tap to <strong>install this page</strong> for a faster scan
               </span>
-            )}
-          </button>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
