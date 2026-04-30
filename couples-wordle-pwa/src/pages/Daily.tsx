@@ -7,9 +7,23 @@ const FALLBACK: DailyQuote = {
   attribution: null
 };
 
+function detectStandalone(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    (window.navigator as { standalone?: boolean }).standalone === true ||
+    window.matchMedia('(display-mode: standalone)').matches
+  );
+}
+
+function detectIOS(): boolean {
+  if (typeof window === 'undefined') return false;
+  return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+}
+
 export default function Daily() {
   const [quote, setQuote] = useState<DailyQuote | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [showA2HS, setShowA2HS] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,14 +44,30 @@ export default function Daily() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!detectStandalone()) {
+      const t = window.setTimeout(() => setShowA2HS(true), 800);
+      return () => window.clearTimeout(t);
+    }
+  }, []);
+
   const today = new Date().toLocaleDateString(undefined, {
     weekday: 'long',
     month: 'long',
     day: 'numeric'
   });
 
+  const isIOS = detectIOS();
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[hsl(var(--brand-mist))] via-[hsl(var(--brand-white))] to-[hsl(var(--brand-sage))]/30 p-6">
+    <div
+      className="min-h-[100svh] flex items-center justify-center bg-gradient-to-br from-[hsl(var(--brand-mist))] via-[hsl(var(--brand-white))] to-[hsl(var(--brand-sage))]/30 p-6"
+      style={{
+        paddingTop: 'max(1.5rem, env(safe-area-inset-top))',
+        paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
+        touchAction: 'manipulation'
+      }}
+    >
       <div
         className={`w-full max-w-xl rounded-[2rem] bg-[hsl(var(--brand-white))]/90 shadow-xl ring-1 ring-black/5 px-8 py-12 md:px-12 md:py-16 text-center transition-opacity duration-500 ${
           loaded ? 'opacity-100' : 'opacity-0'
@@ -55,6 +85,26 @@ export default function Daily() {
           {today}
         </p>
       </div>
+
+      {showA2HS && (
+        <button
+          type="button"
+          onClick={() => setShowA2HS(false)}
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 max-w-[20rem] rounded-2xl bg-brand-hunter/95 text-white text-xs px-4 py-3 shadow-lg backdrop-blur transition-opacity duration-500 active:opacity-70"
+          style={{ bottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+          aria-label="Dismiss add-to-home-screen hint"
+        >
+          {isIOS ? (
+            <span>
+              Tap <span aria-hidden>⬆️</span> Share &rarr; <strong>Add to Home Screen</strong> for a faster scan
+            </span>
+          ) : (
+            <span>
+              Tap your browser menu &rarr; <strong>Install app</strong> for a faster scan
+            </span>
+          )}
+        </button>
+      )}
     </div>
   );
 }
