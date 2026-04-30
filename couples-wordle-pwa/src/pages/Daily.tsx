@@ -40,35 +40,37 @@ const A2HS_DISMISSED_KEY = 'daily:a2hs-dismissed';
 function IosShareIcon(props: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 16 20"
+      viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden
       className={props.className}
     >
-      <path d="M3 8v9a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V8" />
-      <path d="M8 1v12" />
-      <path d="M5 4l3-3 3 3" />
+      <path d="M7 11v8a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-8" />
+      <path d="M12 3v13" />
+      <path d="M8 7l4-4 4 4" />
     </svg>
   );
 }
 
-function IosPlusIcon(props: { className?: string }) {
+function IosAddToHomeIcon(props: { className?: string }) {
   return (
     <svg
-      viewBox="0 0 16 16"
+      viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.8"
       strokeLinecap="round"
+      strokeLinejoin="round"
       aria-hidden
       className={props.className}
     >
-      <path d="M8 3v10" />
-      <path d="M3 8h10" />
+      <rect x="3" y="3" width="18" height="18" rx="4" />
+      <path d="M12 8v8" />
+      <path d="M8 12h8" />
     </svg>
   );
 }
@@ -213,10 +215,10 @@ export default function Daily() {
             {isIOSSafari ? (
               <span className="inline-flex items-center gap-1.5 flex-wrap">
                 Tap
-                <IosShareIcon className="h-4 w-4 inline-block" />
+                <IosShareIcon className="h-[1.1em] w-[1.1em] shrink-0 inline-block" />
                 Share
                 <span aria-hidden>&rarr;</span>
-                <IosPlusIcon className="h-3.5 w-3.5 inline-block" />
+                <IosAddToHomeIcon className="h-[1.1em] w-[1.1em] shrink-0 inline-block" />
                 <strong>Add to Home Screen</strong>
               </span>
             ) : isIOS ? (
