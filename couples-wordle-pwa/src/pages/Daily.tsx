@@ -189,6 +189,18 @@ export default function Daily() {
         touchAction: 'manipulation'
       }}
     >
+      <header
+        className="fixed left-1/2 -translate-x-1/2 text-center pointer-events-none"
+        style={{ top: 'max(0.75rem, env(safe-area-inset-top))' }}
+      >
+        <p className="font-sans text-xs uppercase tracking-widest text-textSecondary">
+          Daily Encouragement
+        </p>
+        <p className="font-sans text-[10px] uppercase tracking-wider text-textSecondary/70 mt-0.5">
+          A new quote every day
+        </p>
+      </header>
+
       <div
         className={`w-full max-w-xl rounded-[2rem] bg-[hsl(var(--brand-white))]/90 shadow-xl ring-1 ring-black/5 px-8 py-12 md:px-12 md:py-16 text-center transition-opacity duration-500 ${
           loaded ? 'opacity-100' : 'opacity-0'
