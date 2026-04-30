@@ -25,6 +25,26 @@ function detectIOS(): boolean {
   return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
 }
 
+const A2HS_DISMISSED_KEY = 'daily:a2hs-dismissed';
+
+function wasA2HSDismissed(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(A2HS_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function persistA2HSDismissed() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(A2HS_DISMISSED_KEY, '1');
+  } catch {
+    /* private mode / quota — fall through, will reappear next visit */
+  }
+}
+
 export default function Daily() {
   const [quote, setQuote] = useState<DailyQuote | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -51,7 +71,7 @@ export default function Daily() {
   }, []);
 
   useEffect(() => {
-    if (detectStandalone()) return;
+    if (detectStandalone() || wasA2HSDismissed()) return;
     const t = window.setTimeout(() => setShowA2HS(true), 800);
     const onBeforeInstall = (e: Event) => {
       e.preventDefault();
@@ -59,6 +79,7 @@ export default function Daily() {
     };
     const onInstalled = () => {
       installEvtRef.current = null;
+      persistA2HSDismissed();
       setShowA2HS(false);
     };
     window.addEventListener('beforeinstallprompt', onBeforeInstall);
@@ -154,7 +175,10 @@ export default function Daily() {
           </button>
           <button
             type="button"
-            onClick={() => setShowA2HS(false)}
+            onClick={() => {
+              persistA2HSDismissed();
+              setShowA2HS(false);
+            }}
             aria-label="Dismiss hint"
             className="px-3 py-3 border-l border-white/15 active:bg-white/10 text-white/80 hover:text-white"
           >
