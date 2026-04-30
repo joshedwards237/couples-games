@@ -3533,3 +3533,36 @@ $$;
 
 revoke all on function public.admin_delete_user(uuid) from public, anon;
 grant execute on function public.admin_delete_user(uuid) to authenticated;
+
+-- =========================================================================
+-- Daily quote — public RFID-scannable /daily route
+-- Quotes live in `private` schema; only readable via SECURITY DEFINER RPC.
+-- Deterministic per Denver-local day so any device scanning sees the same
+-- quote until midnight.
+-- =========================================================================
+create schema if not exists private;
+
+create table if not exists private.quotes (
+  id uuid primary key default gen_random_uuid(),
+  text text not null,
+  attribution text,
+  created_at timestamptz not null default now()
+);
+
+alter table private.quotes enable row level security;
+
+create or replace function public.get_daily_quote()
+returns table (id uuid, quote_text text, attribution text)
+language sql
+security definer
+stable
+set search_path = public, private
+as $$
+  select q.id, q.text, q.attribution
+  from private.quotes q
+  order by md5(((now() at time zone 'America/Denver')::date)::text || ':' || q.id::text)
+  limit 1;
+$$;
+
+revoke all on function public.get_daily_quote() from public;
+grant execute on function public.get_daily_quote() to anon, authenticated;

@@ -69,7 +69,8 @@ module.exports = {
       },
       fontFamily: {
         sans: ['"Atkinson Hyperlegible"', ...fontFamily.sans],
-        heading: ['"SF Pro Rounded"', '"SF Pro Display"', ...fontFamily.sans]
+        heading: ['"SF Pro Rounded"', '"SF Pro Display"', ...fontFamily.sans],
+        handwriting: ['"Caveat"', 'cursive']
       },
       keyframes: {
         'accordion-down': {
